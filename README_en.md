@@ -45,24 +45,29 @@ The project is divided into **Fundamentals** and **Practice** sections, correspo
 | [Chapter 4 Vector Search Basics](./docs/base/chapter4/向量搜索算法基础.md) | Brute-force search and similarity metrics | ✅ |
 | [Chapter 5 ANN Search Algorithms](./docs/base/chapter5/ANN搜索算法.md) | IVF, PQ, HNSW, LSH, Annoy principles & code | ✅ |
 | [Chapter 6 Build Your Own Vector Database](./docs/base/chapter6/实现你自己的向量数据库.md) | Minimal vector DB implementation | ✅ |
-| <strong>Part II: Faiss Tutorial</strong> | High-performance vector search engine |  |
+| <strong>Part II: Annoy Tutorial</strong> | Lightweight ANN search library |  |
+| [Chapter 1 Annoy Introduction & Setup](./docs/Annoy/chapter1/Annoy入门与环境搭建.md) | Installation and core concepts | ✅ |
+| [Chapter 2 Annoy Core API](./docs/Annoy/chapter2/Annoy核心API详解.md) | Index building, querying, parameter tuning | ✅ |
+| [Chapter 3 Annoy Advanced Tips & Best Practices](./docs/Annoy/chapter3/Annoy进阶技巧与最佳实践.md) | Performance optimization, engineering practices | ✅ |
+| <strong>Part III: Faiss Tutorial</strong> | High-performance vector search engine |  |
 | [Chapter 1 FAISS Introduction & Setup](./docs/faiss/chapter1/FAISS入门与环境搭建.md) | Installation and core concepts | ✅ |
 | [Chapter 2 FAISS Core Indexes](./docs/faiss/chapter2/FAISS数据结构与索引.md) | Flat, IVF, PQ, HNSW indexes | ✅ |
 | [Chapter 3 Advanced FAISS Features](./docs/faiss/chapter3/FAISS核心功能进阶.md) | Composite indexes, GPU, batch search | ✅ |
 | [Chapter 4 FAISS Performance Tuning](./docs/faiss/chapter4/FAISS性能调优与评估.md) | Recall, latency, memory optimization | ✅ |
 | [Chapter 5 FAISS Engineering Practices](./docs/faiss/chapter5/FAISS工程化落地实战.md) | Service deployment and real-world cases | ✅ |
-| <strong>Part III: Milvus Tutorial</strong> | Distributed vector database & engineering |  |
+| <strong>Part IV: Milvus Tutorial</strong> | Distributed vector database & engineering |  |
 | [Chapter 1 Milvus Introduction: Concepts & Architecture](./docs/milvus/chapter1/Milvus向量数据库入门.md) | Architecture and core components | ✅ |
 | [Chapter 2 Milvus Core Concepts](./docs/milvus/chapter2/Milvus核心概念.md) | Collection, Partition, Index | ✅ |
 | [Chapter 3 Milvus Basic Operations](./docs/milvus/chapter3/PyMilvus核心API实战.md) | Data ingestion, query, index management | ✅ |
 | [Chapter 4 Milvus AI Applications: Hybrid Search with BM25](./docs/milvus/chapter4/Milvus的AI应用开发.md) | RAG and hybrid retrieval | ✅ |
 | [Chapter 5 Milvus AI Applications: Image Retrieval](./docs/milvus/docs/Milvus/chapter5/Milvus的AI应用开发.md) | Image retrieval system | ✅ |
 | [Chapter 6 Milvus Advanced Topics](./docs/milvus/chapter6/Milvus底层架构详解.md) | Internal architecture, reranker, Milvus Lite, MinerU | ✅ |
-| <strong>Part IV: AI Applications Based on Vector Databases</strong> |  |  |
-| [Project 1 RAG with FAISS](./docs/projects/project1/README.md) | RAG using FAISS | ✅ |
-| [Project 2 Agent with Milvus](./docs/projects/project2/README.md) | Agent system using Milvus | ✅ |
-| [Project 3 RAG with Milvus & ArangoDB](./docs/projects/project3/README.md) | Hybrid RAG system | ✅ |
-| <strong>Part V: Supplementary Topics</strong> | Related advanced topics |  |
+| <strong>Part V: AI Applications Based on Vector Databases</strong> |  |  |
+| [Project 1 Recommendation Recall with Annoy](./docs/projects/project1/README.md) | DSSM + Annoy vector recall | ✅ |
+| [Project 2 RAG with FAISS](./docs/projects/project2/README.md) | RAG using FAISS | ✅ |
+| [Project 3 Agent with Milvus](./docs/projects/project3/README.md) | Agent system using Milvus | ✅ |
+| [Project 4 RAG with Milvus & ArangoDB](./docs/projects/project4/README.md) | Hybrid RAG system | ✅ |
+| <strong>Part VI: Supplementary Topics</strong> | Related advanced topics |  |
 | [Vector Fundamentals](./docs/more/chapter5/向量.md) | Vector math and basics | ✅ |
 | [FusionANNS Architecture](./docs/more/chapter1/GPU加速检索-基于FusionANNS.md) | GPU-accelerated retrieval | ✅ |
 | [Meta-Chunking Strategy](./docs/more/chapter2/Meta-Chunking：一种新的文本切分策略.md) | Intelligent text chunking | ✅ |
@@ -70,8 +75,6 @@ The project is divided into **Fundamentals** and **Practice** sections, correspo
 | [RabitQ Indexing](./docs/more/chapter4/RabitQ：用于近似最近邻搜索的带理论误差界的高维向量量化.md) | High-dimensional quantization | ✅ |
 | [Clustering Algorithms](./docs/more/chapter6/聚类算法介绍.md) | Clustering overview | ✅ |
 
-If you’d like to add more specific documentation items, feel free to tell me what to include.  
-If you want to modify the existing JSON navigation structure, you can also specify where to add them.
 
 ⏳ **Continuously updating...**
 

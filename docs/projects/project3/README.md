@@ -1,1257 +1,638 @@
-# 基于Milvus和ArangoDB的RAG系统
+# Chapter3 Milvus 在 AI Agent 中的应用
 
-> ipynb可执行代码请点击：[基于Milvus和ArangoDB的RAG系统.ipynb](https://github.com/datawhalechina/easy-vecdb/blob/main/docs/projects/project3/project3.ipynb)
-
-很多学习者没有了解过ArangoDB这个数据库，下面，你可以通过该部分系统性的了解这个数据库，也可以跳过这部分直接看设计思想部分。
-
-## 1. 什么是 ArangoDB？(Core Concept)
-
-在传统架构中，我们通常需要一个 **MongoDB** 存文档，再用一个 **Neo4j** 存图关系。
-**ArangoDB** 的核心理念是 **Multi-Model（多模态）**：
-> **“One Engine, One Query Language, Multiple Data Models”**
-
-它在一个数据库引擎中同时支持：
-1.  **文档 (Documents)**：像 MongoDB 一样存储 JSON 数据（我们的 Chunks 正文）。
-2.  **图 (Graphs)**：像 Neo4j 一样存储节点关系（我们的 Context 上下文）。
-3.  **键值 (Key-Value)**：像 Redis 一样快速读写（我们的 Cache）。
-
-### 为什么本项目的 RAG 系统选择 ArangoDB？
-*   **存算分离**：Milvus 这种昂贵的显存资源只存“索引向量”，而海量的“文本肉身”需要一个支持倒排索引的数据库来存，ArangoDB 的文档存储非常适合。
-*   **上下文召回**：当 RAG 检索到一段话时，我们需要毫秒级找回它的**“上一段话”**或**“父标题”**。传统数据库做关联查询（Join）很慢，而 ArangoDB 的**原生图遍历 (Graph Traversal)** 极快。
-*   **统一查询 (AQL)**：我们可以用类似 SQL 的语法（AQL）同时完成“过滤 Cluster ID”和“查找图邻居”两个操作。
-
----
-
-## 2. 核心术语 (Key Terminology)
-
-在代码中你会频繁遇到以下三个概念，请务必分清：
-
-| 术语 | 对应关系型数据库 | 我们的项目用途 | 示例 |
-| :--- | :--- | :--- | :--- |
-| **Collection** | 表 (Table) | 存放数据的容器 | `rag_chunks` |
-| **Document** | 行 (Row) | 实际的数据记录 (JSON) | `{ "text": "...", "cluster_id": 101 }` |
-| **Edge** | 关联表 (Join Table) | **连接线**，特殊的 Document，必须包含 `_from` 和 `_to` | `{ "_from": "Chunk/A", "_to": "Chunk/B", "type": "NEXT_TO" }` |
-| **Graph** | 视图 (View) | 定义哪些 Collection 和 Edge 组成一张网 | `rag_knowledge_graph` |
-
----
-
-## 3. 基础使用方法
-
-本项目使用 `python-arango` 驱动。以下是你在项目中必须掌握的 **CRUD** 和 **图操作** 模板。
-
-### 3.1 连接与初始化
-
-```python
-from arango import ArangoClient
-
-# 1. 建立连接
-client = ArangoClient(hosts='http://127.0.0.1:8529')
-
-# 2. 连接/创建数据库
-sys_db = client.db('_system', username='root', password='pass123')
-if not sys_db.has_database('rag_db'):
-    sys_db.create_database('rag_db')
-
-db = client.db('rag_db', username='root', password='pass123')
-```
-
-### 3.2 存储文档 
-
-这是我们存储 Chunk 正文的地方。
-
-```python
-# 创建集合 (类似建表)
-if not db.has_collection('rag_chunks'):
-    chunks = db.create_collection('rag_chunks')
-else:
-    chunks = db.collection('rag_chunks')
-
-# 插入数据
-doc = {
-    "_key": "uuid_1",  # 指定主键，方便查找
-    "text": "这是第一段话。",
-    "cluster_id": 101
-}
-chunks.insert(doc, overwrite=True) # overwrite=True 类似 Upsert
-
-# 查询数据 (通过 Key)
-result = chunks.get("uuid_1")
-print(result['text'])
-```
-
-### 3.3 创建关系 (Edge Operation)
-
-这是我们构建“上下文链条”的关键。
-
-```python
-# 创建边集合 (必须指定 edge=True)
-if not db.has_collection('rag_relations'):
-    edges = db.create_collection('rag_relations', edge=True)
-
-# 插入一条边：表示 uuid_1 的下一段是 uuid_2
-edge_data = {
-    "_from": "rag_chunks/uuid_1",  # 必须带集合前缀
-    "_to":   "rag_chunks/uuid_2",
-    "type":  "NEXT_TO"
-}
-edges.insert(edge_data)
-```
-
-### 3.4 高级查询：AQL (ArangoDB Query Language)
-
-这是 ArangoDB 最强大的地方。AQL 看起来很像 SQL。
-
-**场景 1：普通查询**
-*“给我找出属于聚类 101 的所有文档。”*
-
-```python
-aql = """
-FOR doc IN rag_chunks
-    FILTER doc.cluster_id == 101
-    RETURN { id: doc._key, content: doc.text }
-"""
-cursor = db.aql.execute(aql)
-for item in cursor:
-    print(item)
-```
-
-**场景 2：图遍历（上下文扩展）**
-*“找到 uuid_1 这段话，并且顺着 'NEXT_TO' 关系，把它后面的一段话也找出来。”*
-
-```python
-graph_aql = """
-FOR v, e, p IN 1..1 OUTBOUND 'rag_chunks/uuid_1' rag_relations
-    FILTER e.type == 'NEXT_TO'
-    RETURN v.text
-"""
-# 1..1 OUTBOUND: 向外走 1 步
-# v: vertex (节点/下一段话)
-# e: edge (边)
-# p: path (路径)
-
-cursor = db.aql.execute(graph_aql)
-next_text = [doc for doc in cursor]
-print(f"下文是: {next_text}")
-```
-
----
-
-## 4. 在本项目中的数据流转图
-
-为了让你彻底理解，请看这张数据在 ArangoDB 内部的流转图：
-
-```mermaid
-graph LR
-    subgraph ArangoDB
-        direction TB
-        
-        C1[Chunk A] -- NEXT_TO --> C2[Chunk B]
-        C2 -- NEXT_TO --> C3[Chunk C]
-        
-        Header[标题: 财务报表] -- PARENT_OF --> C1
-        Header -- PARENT_OF --> C2
-        
-        style C1 fill:#e1f5fe,stroke:#01579b
-        style C2 fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
-        style C3 fill:#e1f5fe,stroke:#01579b
-    end
-    
-    Milvus(Milvus 路由) -.->|Cluster ID: 101| C2
-    
-    classDef highlight fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
-```
-
-1.  **Milvus** 告诉我们要找 **Chunk B**（黄色高亮）。
-2.  我们直接去 ArangoDB 拿到 **Chunk B** 的正文。
-3.  通过 **AQL 图遍历**，我们瞬间抓取到：
-    *   `OUTBOUND` -> **Chunk C** (下文)
-    *   `INBOUND` -> **Chunk A** (上文)
-    *   `INBOUND` -> **Header** (父标题)
-
-## 设计思想
-传统的RAG（切片+向量库）存在两个致命问题：
-1. 断章取义：把文档切割为500字一段，丢失了”这段话属于哪个标题“的上下文。
-2. 显存昂贵：几百万条向量全部塞入Milvus，内存占用巨大，且包含大量无关噪音。
-
-我们这里提出了一种新的设计方案：FusionGraph RAG：基于聚类路由与图谱增强的检索系统
-
-我们的解决方案：
-1. Meta-chunking：利用OCR版面分析，按照标题和语义切分，而不是按字数。(本教程为了学习者更好的跑通流程，并未使用OCR)
-2. FusionANNS：
-    * Milvus变身为路由表，只存储聚类中心，极度节省内存
-    * ArangoDB变为藏书阁，存储原始文本和图关系。
-3. Graph Expansion（图谱扩展）：检索到一句话时，顺着图关系把他们的父标题和前一段一起捞出来，给LLM看完整的上下文。
+> ipynb可执行代码请点击：[Milvus在AI Agent中的应用.ipynb](https://github.com/datawhalechina/easy-vecdb/blob/main/docs/projects/project3/project3.ipynb)
 
 
-| 阶段 (Stage) | 输入 (Input) | 核心动作 (Action) | 输出 (Output) | 承载组件 |
-| :--- | :--- | :--- | :--- | :--- |
-| **1. ETL 数据处理层** | 原始 PDF | **OCR 版面分析** + **Meta-Chunking** (语义切分) | 结构化的 Chunks (含 Header 路径) | PaddleOCR, Python |
-| **2. 索引构建层** | Chunks | **BGE-M3 向量化** + **FAISS 聚类** | 质心向量 (Centroids) + 聚类 ID | FAISS (GPU), BGE-M3 |
-| **3. 存储与服务层** | 质心 & Chunks | **双写分发 (Dual Ingestion)** | Milvus (路由) + ArangoDB (内容) | Milvus, ArangoDB |
+本项目将通过LangGraph和Milvus构建Agent
 
-## 详细表结构设计
-严格遵循存算分离原则：Milvus只存储索引头，ArangoDB存储全量数据
+## 什么是Agent
+一个典型的Agent通常包含以下几个核心组件：
+1. palnning（规划）：
+    * 目标设定和分解：Agent首先需要理解用户的最终目标，并将其分解为一些了可执行的子任务或步骤
+    * 策略选择：对于每个子任务，Agent可能有多种执行方式或则工具可以选择。规划模块负责选择最优策略。
+    * 执行监控和调整：在任务执行过程中，Agent需要监控进展，并根据实际情况调整计划。
+2. Memory（记忆）：
+    * 短期记忆：用于存储当前对话的上下文，最近的交互信息或正在处理的任务的中间状态，这对于保持对话连贯性和多轮对话至关重要。
+    * 长期记忆：用于存储Agent学习到的知识、过去的经验、用户偏好、成功的解决方案等。这使得Agent能够从过去的交互中学习，并随着时间的推移变得更加智能和个性化。
+3. Tools（工具）：
+    * 功能调用：Agent可以使用各种工具来完成特定任务，这些工具可以是：
+        * API调用：例如天气、查数据库、发邮件。
+        * 代码执行：执行python脚本或其他代码片段或行复杂计算。
+        * 知识库查询：从外部知识库（Milvus）中检索信息。
+    * 工具选择与使用：Agent的规划模块需要决定何时使用哪个工具，以及如何将工具的输出整合到其任务执行流程中。
+## Milvus 在 Agent 中的角色
 
-### 1.Milvus表结构设计
-**设计原则**
-极度瘦身，只存储话题簇的中心点，用于快速定位用户问题属于哪个领域（例如：财务、技术、运动）
+Milvus 作为一个高性能的向量数据库，在 AI Agent 中可以扮演两个至关重要的角色：
 
-Collection Name：rag_cluster_centorids
-| 字段名 | 数据类型 | 属性 | 解释与设计理由 |
-| :--- | :--- | :--- | :--- |
-| **`cluster_id`** | **Int64** | **Primary Key** | **核心连接点**。这是连接 Milvus 和 ArangoDB 的唯一钥匙。例如：`101`。 |
-| **`vector`** | **FloatVector** | Dim=1024 | **质心向量**。该聚类下所有 Chunk 向量的平均值。查询时用它做相似度匹配。 |
-| `member_count` | Int32 | Scalar | 该聚类包含多少个 Chunk。用于后续可能的权重调整（比如大聚类降权）。 |
-* 为什么要这么设计？
-    * 省钱：假设有1000万个chunk，聚成一万个类，Milvus只存储1万条向量，内存占用直接变为原来的一千分之一
-    * 快：在一万条数据里搜索Top-5，比在1000万条里搜，速度快几个数量级
+### 1. External Knowledge Base (外部知识库)
 
-### 2.ArangoDB表结构设计
-**设计原则**存储全量数据，并利用图关系解决上下文丢失问题
+*   **功能:** Agent 经常需要访问和查询大量的外部信息来回答问题或完成任务。这些信息可以是非结构化的文本数据、文档、网页内容等。
+*   **Milvus 的作用:**
+    *   **存储:** 将这些外部信息通过 Embedding 模型转化为向量，并存储在 Milvus 中。
+    *   **检索:** 当 Agent 需要相关信息时，它可以将用户的查询或其内部思考也转化为向量，然后在 Milvus 中进行高效的相似性搜索，快速找到最相关的知识片段。
+    *   **类似 RAG:** 这种模式与检索增强生成 (Retrieval Augmented Generation, RAG) 非常相似。Milvus 作为 RAG 架构中的核心检索引擎，为 Agent 提供准确、相关的上下文信息，从而提升其回答的质量和事实性。
 
-#### A. 节点集合 (Document Collection): `rag_chunks`
+### 2. Memory (记忆)
 
-| 字段名 | 类型 | 索引类型 | 解释与设计理由 |
-| :--- | :--- | :--- | :--- |
-| **`_key`** | String | Primary | **Chunk UUID**。唯一标识一个文本块。 |
-| **`cluster_id`** | Int64 | **Persistent Index** | **外键**。对应 Milvus 里的 ID。**查询时通过此字段毫秒级拉取该簇所有数据。** |
-| `text` | String | None | **正文**。最占空间的数据，存在磁盘上，不占宝贵的显存。 |
-| `header_path`| List[Str]| None | **层级路径**。例如 `['2023年报', '财务数据']`。用于生成引用来源。 |
-| `metadata` | JSON | None | 存 Page, BBox 等元数据，用于前端高亮显示。 |
+*   **功能:** Agent 需要记住过去的交互、学习到的经验、成功的规划步骤等，以便在未来的任务中更好地执行。
+*   **Milvus 的作用:**
+    *   **存储对话历史:** Agent 的对话历史（用户提问、Agent 回答、中间思考）可以被向量化并存储在 Milvus 中。
+    *   **存储学习经验:** Agent 在执行任务过程中学习到的成功策略、失败教训、用户偏好等，都可以转化为向量形式存储起来。
+    *   **存储规划步骤:** 复杂的任务规划过程中的中间步骤和决策逻辑，也可以向量化后存入 Milvus，供未来相似任务参考。
+    *   **快速召回:** 当 Agent 开始新的对话或任务时，它可以查询 Milvus 中存储的记忆向量，找到与当前情境最相似的历史记录或经验，从而快速回忆相关信息，提供更连贯、个性化和高效的服务。
 
-#### B. 边集合 (Edge Collection): `rag_relations`
+通过将信息向量化并存储在 Milvus 中，Agent 可以利用语义相似性来检索知识和记忆，而不仅仅是关键词匹配，这使得 Agent 的信息获取和利用能力大大增强。
 
-| 字段名 | 类型 | 解释与设计理由 |
-| :--- | :--- | :--- |
-| **`_from`** | String | 起始节点 ID (例如 `rag_chunks/uuid_A`) |
-| **`_to`** | String | 目标节点 ID (例如 `rag_chunks/uuid_B`) |
-| **`type`** | String | **关系类型**。核心设计点，用于上下文扩展。 |
+## 案例演示/代码讲解：一个使用 LangGraph 和 Milvus 的 Agent
 
-*   **关系类型 (`type`) 详解**：
-    *   `NEXT_TO`: 表示阅读顺序。查询到 Chunk A 时，顺着这条边能找到 Chunk B（下一段）。
-    *   `PARENT_OF`: 表示层级。查询到 Chunk A 时，反向遍历这条边能找到它的父标题节点（如果有独立标题节点设计）。
+接下来，我们将通过一个简化的案例，演示一个 AI Agent 如何利用 Milvus 作为外部知识库。我们将使用 LangGraph 来构建 Agent 的控制流程。
 
-*   **为什么要这么设计？**
-    *   **上下文救星**：当 LLM 看到一句“净利润增长 10%”时，它不知道是谁的。通过图遍历 `PARENT_OF` 找到父标题“华东分公司”，LLM 就能精准回答。
-    *   **灵活**：Milvus 这种向量库很难存这种网状关系，图数据库是最佳选择。
+**核心流程：**
 
-## 数据格式
+1.  **用户提问:** 用户向 Agent 提出一个问题。
+2.  **Agent 规划 (识别需求):** Agent (通过 LLM) 分析问题，判断是否需要从外部知识库 (Milvus) 中获取信息。
+3.  **查询向量化:** 如果需要，Agent 将用户的查询或其衍生的搜索关键词转化为向量。
+4.  **Milvus 搜索:** Agent 使用该向量在 Milvus 中搜索相关的知识。
+5.  **获取信息:** Milvus 返回最相关的文档片段。
+6.  **Agent 整合信息并响应:** Agent 结合从 Milvus 获取的信息和自身的推理能力，生成最终答案给用户。
 
-### 分段后的数据格式
-```json
-{
-  "id": "a1b2c3d4-5678-90ef-...",  // UUID v4 或 MD5
-  "text": "2023年公司净利润为2.5亿元，同比增长15%...",
-  "metadata": {
-    "source_file": "2023_financial_report.pdf",
-    "page_number": 5,
-    "chunk_index": 42,             // 在全文中的序号，用于排序
-    "bbox": [100, 200, 500, 600],  // PaddleOCR 提供的坐标 [x1, y1, x2, y2]
-    "type": "text"                 // text / table
-  },
-  "header_path": ["2023年度报告", "第四章 财务数据", "主要会计数据"], // 核心：层级路径
-  
-  // 预留字段，稍后计算填充
-  "vector": null,                  // 等待 BGE-M3 填充
-  "sparse_vector": null,           // 等待 BGE-M3 填充
-  "cluster_id": -1,                // 等待 FAISS 填充
-  "prev_chunk_id": "e5f6...",      // 指向第 41 号 Chunk 的 ID
-  "next_chunk_id": "g7h8..."       // 指向第 43 号 Chunk 的 ID
-}
-```
-### ArangoDB数据格式
-#### 节点表-存正文
-```json
-// Document Example
-{
-  "_key": "a1b2c3d4...",           // 直接复用 Chunk 的 UUID
-  "text": "2023年公司净利润...",
-  "source": "2023_financial_report.pdf",
-  "page": 5,
-  "cluster_id": 105,               // 关键索引字段：用于从 Milvus 路由过来
-  "header_path_str": "2023年度报告 > 财务数据", // 方便人类阅读的字符串
-  "embedding_status": true
-}
-```
-#### 节点表-存标题
-```json
-// Document Example
-{
-  "_key": "md5_of_header_text",    // 标题内容的 Hash
-  "text": "主要会计数据",
-  "level": 3                       // H3 标题
-}
-```
-#### 边表-存关系
-```json
-{
-  "_from": "rag_chunks/chunk_42",
-  "_to": "rag_chunks/chunk_43",
-  "type": "NEXT_TO"
-}
-```
-## 数据处理
+**同时，我们也可以构想 Agent 如何存储对话片段：**
 
-[document.pdf](https://github.com/Anduin2017/HowToCook)是一个做饭的文档，里面有800多页，现在我们对其进行处理，保存为我们需要的数据格式，有条件的可以用OCR，但这里我用的PyMuPDF+Ray，尽可能把CPU跑满，效率最大化,PyMuPDF是Python界最快的PDF解析库，底层基于C++实现，可以直接提取文本的字体大小和位置 。
+1.  **对话结束/片段记录:** 在对话的某个节点（例如，一轮问答结束），Agent 将该对话片段（用户问题、Agent 回答、可能还有一些上下文元数据）进行向量化。
+2.  **存入 Milvus 记忆库:** 将这个向量及对应的文本内容存入一个专门的 Milvus 集合（或特定分区）作为长期记忆。
+3.  **新对话开始时召回:** 当新的对话开始，或用户提出一个模糊的问题时，Agent 可以将当前输入向量化，在 Milvus 记忆库中搜索相似的历史对话，从而快速理解用户意图或提供更个性化的回应。
 
-这里我们要对之前的策略进行调整：以前我们靠OCR告诉我们哪里是标题，现在我们需要靠字体大小猜测标题位置（比如：字号 > 正文平均字号的 1.2 倍 -> 视为 H1/H2）。
+**下面我们聚焦于使用 Milvus 作为外部知识库的 LangGraph Agent 实现。**
+
+我们将简化上述参考链接中的 GraphRAG 概念，构建一个更直接的 Agent，它有一个工具是查询 Milvus。
+
+### 1. 准备环境
 
 ```shell
-pip install ray pymupdf langchain langchain-community zhipuai faiss-cpu numpy tqdm
+! pip install pymilvus langchain==0.3.25 langgraph==0.4.7 langchain_openai==0.3.18 langchain_community==0.0.38 langchain-core==0.3.61 
 ```
-1.  **Ray + PyMuPDF**: 并行提取 800 页 PDF 的纯文本。
-2.  **LangChain Splitter**: 使用标准的 `RecursiveCharacterTextSplitter` 进行切片。
-3.  **ZhipuAI API**: 调用云端模型生成向量。
-4.  **FAISS (CPU)**: 本地快速聚类。
-
-
-1.  **Ray 负责脏活累活**：
-    *   PDF 解析是 CPU 密集型任务，Ray 利用多核并行处理，速度极快。
-    *   只提取纯文本，内存占用极低。
-
-2.  **LangChain 负责规范化**：
-    *   使用了 `RecursiveCharacterTextSplitter`。这是目前最通用的分段方式，虽然它不如 Meta-Chunking 智能（会丢失 Header 层级信息），但**兼容性最好，上手最快**。
-    *   它会自动处理标点符号切分，保证句子尽量完整。
-
-3.  **智谱 API 负责核心算力**：
-    *   使用了 `ZhipuAIEmbeddings`。你只需要填 Key，剩下的交给云端。
-    *   **注意**：800 页 PDF 可能会生成 5000-8000 个 Chunk。智谱 API 是收费的（虽然 embedding-2 很便宜），请关注你的 Token 用量。
-
-4.  **数据结构保持兼容**：
-    *   虽然因为使用了 LangChain Splitter，我们丢失了 `header_path` 的自动提取（现在为空列表 `[]`），但 `cluster_id` 和图谱所需的 `prev/next` 链表关系依然保留。这不影响我们后续构建“存算分离”架构，只是图谱里少了一种“父子关系”边而已。
 
 ```python
-import ray
-import fitz  # PyMuPDF
 import os
-import json
 import uuid
-import numpy as np
-import faiss
-from typing import List, Dict
-from tqdm import tqdm
+from typing import TypedDict, Annotated, List, Union
+import operator
+from datetime import datetime
 
-# LangChain 组件
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.chat_models import ChatZhipuAI
 from langchain_community.embeddings import ZhipuAIEmbeddings
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_community.vectorstores import Milvus
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import create_react_agent
 
-# ==================================================
-# 配置区域
-# ==================================================
-ZHIPU_API_KEY = ""  # 你的智谱APIKey
-PDF_PATH = "document.pdf"   # 你的PDF路径
+from pymilvus import connections, utility, CollectionSchema, FieldSchema, DataType, Collection
+# 中文场景下，智谱的效果好一些，所以这里记得填写密钥
+ZHIPUAI_API_KEY = ""  
+# 记得启动你本地的Milvus服务
+MILVUS_HOST = "localhost"
+MILVUS_PORT = "19530"
+MILVUS_COLLECTION_NAME = "ai_agent_knowledge_base"
+MILVUS_EMBEDDING_DIM = 1024  
+ID_FIELD_NAME = "doc_id"
+TEXT_FIELD_NAME = "text_content"
+VECTOR_FIELD_NAME = "embedding"
 
-# ==================================================
-# 1. Ray Actor: PDF 文本提取工兵
-# ==================================================
-@ray.remote
-class PDFTextExtractor:
-    def __init__(self):
-        pass
-
-    def extract_text(self, pdf_path, start_page, end_page):
-        """
-        只负责提取文本，不负责分段。
-        返回: List[Dict] -> [{'page': 1, 'text': '...'}, ...]
-        """
-        doc = fitz.open(pdf_path)
-        results = []
-        
-        # 防止页码越界
-        total = len(doc)
-        
-        for p_num in range(start_page, end_page):
-            if p_num >= total: break
-            
-            page = doc[p_num]
-            text = page.get_text("text") # 直接提取纯文本
-            
-            # 简单的清洗，去掉过多的空行
-            clean_text = "\n".join([line.strip() for line in text.split('\n') if line.strip()])
-            
-            if clean_text:
-                results.append({
-                    "page": p_num + 1,
-                    "text": clean_text
-                })
-                
-        doc.close()
-        return results
-
-# ==================================================
-# 2. LangChain 分段逻辑
-# ==================================================
-def split_text_with_langchain(raw_pages: List[Dict]):
-    print("--- 正在使用 LangChain RecursiveCharacterTextSplitter 分段 ---")
-    
-    # 初始化 LangChain 分割器
-    # chunk_size: 每个块的字符数
-    # chunk_overlap: 重叠部分，防止上下文丢失
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", "。", "！", "？", " ", ""]
-    )
-    
-    final_chunks = []
-    
-    # 遍历每一页进行切分
-    # 注意：LangChain 通常处理纯文本，我们需要把 page metadata 带进去
-    for page_data in raw_pages:
-        page_num = page_data['page']
-        content = page_data['text']
-        
-        # 调用 LangChain 切分
-        # create_documents 会返回 Document 对象列表
-        docs = text_splitter.create_documents([content])
-        
-        for i, doc in enumerate(docs):
-            chunk_dict = {
-                "id": str(uuid.uuid4()),
-                "text": doc.page_content,
-                "header_path": [], # 纯文本提取丢失了 Header 信息，这里留空或后续补
-                "metadata": {
-                    "source": "doc.pdf",
-                    "page": page_num,
-                    "chunk_index_in_page": i,
-                    "type": "text"
-                },
-                # 预留字段
-                "vector": None,
-                "cluster_id": -1,
-                "prev_chunk_id": None,
-                "next_chunk_id": None
-            }
-            final_chunks.append(chunk_dict)
-            
-    # 建立链表关系 (Next/Prev)
-    for i in range(len(final_chunks)):
-        if i > 0:
-            final_chunks[i]['prev_chunk_id'] = final_chunks[i-1]['id']
-        if i < len(final_chunks) - 1:
-            final_chunks[i]['next_chunk_id'] = final_chunks[i+1]['id']
-            
-    return final_chunks
-
-# ==================================================
-# 3. ZhipuAI 向量化 & FAISS 聚类
-# ==================================================
-def process_embeddings_and_clusters(chunks):
-    print("--- 正在调用智谱 API 生成向量 ---")
-    
-    if "你的API_KEY" in ZHIPU_API_KEY:
-        raise ValueError("请先在代码顶部填入正确的 ZHIPU_API_KEY")
-
-    # 初始化 LangChain 的智谱 Embeddings
-    embeddings_model = ZhipuAIEmbeddings(
-        model="embedding-2", # 智谱目前的通用 Embedding 模型
-        api_key=ZHIPU_API_KEY
-    )
-    
-    texts = [c['text'] for c in chunks]
-    vectors = []
-    
-    batch_size = 10 
-    
-    for i in tqdm(range(0, len(texts), batch_size), desc="Embedding Progress"):
-        batch = texts[i : i + batch_size]
-        try:
-            batch_vecs = embeddings_model.embed_documents(batch)
-            vectors.extend(batch_vecs)
-        except Exception as e:
-            print(f"Batch {i} failed: {e}")
-            vectors.extend([ [0.0]*1024 for _ in range(len(batch)) ])
-
-    # 转换为 numpy 格式
-    np_vectors = np.array(vectors).astype('float32')
-    
-    print("--- 正在进行本地聚类 (FAISS) ---")
-    # 聚类数：假设每 30 个 Chunk 是一个话题簇
-    num_clusters = max(int(len(chunks) / 30), 2)
-    d = np_vectors.shape[1] # 1024
-    
-    # 训练 K-Means
-    kmeans = faiss.Kmeans(d, num_clusters, niter=20, verbose=True)
-    kmeans.train(np_vectors)
-    
-    # 寻找归属
-    D, I = kmeans.index.search(np_vectors, 1)
-    cluster_ids = I.flatten().tolist()
-    centroids = kmeans.centroids
-    
-    # 回填
-    for k, chunk in enumerate(chunks):
-        chunk['vector'] = vectors[k]
-        chunk['cluster_id'] = int(cluster_ids[k])
-        
-    return chunks, centroids
-
-# ==================================================
-# 4. 主程序
-# ==================================================
-def main():
-    ray.init(ignore_reinit_error=True)
-    
-    if not os.path.exists(PDF_PATH):
-        print(f"找不到文件: {PDF_PATH}")
-        return
-
-    doc = fitz.open(PDF_PATH)
-    total_pages = len(doc)
-    doc.close()
-    
-    print(f"文档共 {total_pages} 页，启动 Ray 并行解析...")
-    
-    # 1. Ray 提取文本
-    num_actors = 8
-    chunk_size = 50 # 每次处理 50 页
-    
-    actors = [PDFTextExtractor.remote() for _ in range(num_actors)]
-    futures = []
-    
-    for i in range(0, total_pages, chunk_size):
-        actor = actors[ (i // chunk_size) % num_actors ]
-        futures.append(
-            actor.extract_text.remote(PDF_PATH, i, min(i+chunk_size, total_pages))
-        )
-        
-    results_nested = ray.get(futures)
-    
-    # 展平并按页码排序
-    all_pages = []
-    for res in results_nested:
-        all_pages.extend(res)
-    all_pages.sort(key=lambda x: x['page'])
-    
-    print(f"提取完成，共 {len(all_pages)} 页有效文本")
-    
-    # 2. LangChain 分段
-    final_chunks = split_text_with_langchain(all_pages)
-    print(f"LangChain 切分完成，共生成 {len(final_chunks)} 个 Chunks")
-    
-    # 3. 智谱 Embedding + 聚类
-    processed_chunks, centroids = process_embeddings_and_clusters(final_chunks)
-    
-    # 4. 保存结果
-    output_file = "ready_for_db_zhipu.json"
-    data = {
-        "centroids": centroids.tolist(),
-        "chunks": processed_chunks
-    }
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        
-    print(f"✅ 全部完成！数据已保存至 {output_file}")
-
-if __name__ == "__main__":
-    main()
-```
-现在我们已经有了核心数据了，接下来的任务就是把这些数据各归其位。
-
-## 双写存库
-这一步非常关键，我们将实现：
-1. Milvus建表写入：把质心向量存进去，简历HNSW索引
-2. ArangoDB建图与写入：把Chunk存为节点，把Next_to关系存为边
-
-默认你已经安装好了Milvus和Attu，请先在docker-desktop启动milvus，
-如果你没有安装ArangoDB，请执行：
-```shell
-docker run -d -p 8529:8529 -e ARANGO_ROOT_PASSWORD=pass123 --name arango swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/arangodb/arangodb:3.11
-```
-
-然后执行以下指令，安装所需依赖
-
-```shell
-pip install pymilvus python-arango
-```
-全部执行成功后，请执行下面的代码，下面的代码保证了幂等性：如果表已存在会先删除再重建，确保调试的时候数据不会重复
-
-```python
-import json
-import time
-from pymilvus import (
-    connections, FieldSchema, CollectionSchema, DataType, 
-    Collection, utility
+llm = ChatZhipuAI(
+    model="glm-4",
+    temperature=0,
+    api_key=ZHIPUAI_API_KEY  
 )
-from arango import ArangoClient
+embeddings_model = ZhipuAIEmbeddings(
+    model="embedding-2",
+    api_key=ZHIPUAI_API_KEY  
+)
 
-# ==========================================
-# 配置区域
-# ==========================================
-JSON_FILE = "ready_for_db_zhipu.json"
+print("配置加载完毕（使用 GLM + Milvus）。")
 
-# Milvus 配置
-MILVUS_HOST = "127.0.0.1"
-MILVUS_PORT = "19530"
-MILVUS_COLLECTION = "rag_cluster_centroids"
-DIMENSION = 1024 
+# 初始化向量数据库连接以及字段shema和collection
+def init_milvus_collection():
+    connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)
 
-# ArangoDB 配置
-ARANGO_URL = "http://127.0.0.1:8529"
-ARANGO_USER = "root"
-ARANGO_PASS = "pass123" 
-ARANGO_DB_NAME = "rag_db"
-ARANGO_GRAPH_NAME = "rag_knowledge_graph" # 图名称
+    if utility.has_collection(MILVUS_COLLECTION_NAME):
+        print(f"集合 {MILVUS_COLLECTION_NAME} 已存在。")
+        return
 
-def load_json_data():
-    print(f"正在读取 {JSON_FILE} ...")
-    try:
-        with open(JSON_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data
-    except FileNotFoundError:
-        print(f"错误: 找不到文件 {JSON_FILE}，请检查路径。")
-        exit(1)
+    doc_id = FieldSchema(name=ID_FIELD_NAME, dtype=DataType.VARCHAR, is_primary=True, max_length=36)
+    text_content = FieldSchema(name=TEXT_FIELD_NAME, dtype=DataType.VARCHAR, max_length=65535)
+    embedding = FieldSchema(name=VECTOR_FIELD_NAME, dtype=DataType.FLOAT_VECTOR, dim=MILVUS_EMBEDDING_DIM)
 
-# ==========================================
-# 1. Milvus 入库逻辑 (存路由)
-# ==========================================
-def ingest_to_milvus(centroids):
-    print("\n=== 开始写入 Milvus (路由层) ===")
+    schema = CollectionSchema(fields=[doc_id, text_content, embedding], description="AI Agent Knowledge Base")
+    collection = Collection(name=MILVUS_COLLECTION_NAME, schema=schema)
+
+    index_params = {"index_type": "HNSW", "metric_type": "COSINE", "params": {"M": 8, "efConstruction": 64}}
+    collection.create_index(VECTOR_FIELD_NAME, index_params)
+    print(f"集合 {MILVUS_COLLECTION_NAME} 创建成功。")
+
+# langgraph组件
+vectorstore = Milvus(
+    embedding_function=embeddings_model,
+    connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT},
+    collection_name=MILVUS_COLLECTION_NAME,
+    auto_id=False,
+    primary_field=ID_FIELD_NAME,
+    text_field=TEXT_FIELD_NAME,
+    vector_field=VECTOR_FIELD_NAME,
+)
+
+# 从向量数据库创建一个检索器，并配置每次检索时返回最相似的前三条结果
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# 定义工具，可不要随便起abc的函数名称！
+@tool
+def search_knowledge(query: str) -> str:
+    """从 Milvus 知识库中检索相关信息"""
+    docs = retriever.invoke(query)
+    if not docs:
+        return "未找到相关信息。"
+    return "\n".join([f"[{i+1}] {doc.page_content}" for i, doc in enumerate(docs)])
+
+@tool
+def get_current_time(placeholder: str = "default") -> str: 
+    """Returns the current date and time."""
+    print("\n[Tool Call: get_current_time]")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# 工具列表
+tools = [search_knowledge,get_current_time]
+agent_executor = create_react_agent(llm, tools)
+
+# 你可以尝试询问当前几点了，验证工具是否起作用
+if __name__ == "__main__":
+    print("\n🚀 GLM + Milvus 智能体已就绪！输入问题开始对话（输入 'quit' 退出）：\n")
+
+    user_input = input("👤 你: ").strip()
     
-    # 1. 连接
     try:
-        connections.connect("default", host=MILVUS_HOST, port=MILVUS_PORT)
+        response = agent_executor.invoke({"messages": [("human", user_input)]})
+        ai_message = response["messages"][-1].content
+        print(f"🤖 AI: {ai_message}\n")
     except Exception as e:
-        print(f"Milvus 连接失败: {e}")
-        return
+        print(f"❌ 错误: {e}\n")
+```
+```python
+# Milvus Setup and Helper Functions
 
-    # 2. 清理旧表
-    if utility.has_collection(MILVUS_COLLECTION):
-        utility.drop_collection(MILVUS_COLLECTION)
-        print(f"已删除旧表: {MILVUS_COLLECTION}")
-        
-    # 3. 定义 Schema
-    fields = [
-        FieldSchema(name="cluster_id", dtype=DataType.INT64, is_primary=True),
-        FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=DIMENSION)
-    ]
-    schema = CollectionSchema(fields, description="RAG Cluster Centroids")
-    
-    # 4. 创建集合
-    collection = Collection(name=MILVUS_COLLECTION, schema=schema)
-    print("表结构创建成功")
-    
-    # 5. 插入数据
-    ids = [i for i in range(len(centroids))]
-    vectors = centroids
-    
-    if len(vectors) > 0 and len(vectors[0]) != DIMENSION:
-        print(f"错误: 向量维度 {len(vectors[0])} 与配置 {DIMENSION} 不符！")
-        return
+def connect_to_milvus():
+    """建立与 Milvus 的连接"""
+    try:
+        connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)
+        print(f"成功连接到 Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
+    except Exception as e:
+        print(f"连接 Milvus 失败: {e}")
+        raise
 
-    mr = collection.insert([ids, vectors])
-    print(f"插入请求已提交，受影响行数: {mr.insert_count}")
-    
-    print("正在刷盘 (Flush)...")
-    collection.flush()
-    
-    # 7. 创建索引
+def create_milvus_collection_if_not_exists():
+    """如果集合不存在，则创建它"""
+    connect_to_milvus() # 确保连接
+    if utility.has_collection(MILVUS_COLLECTION_NAME):
+        print(f"集合 '{MILVUS_COLLECTION_NAME}' 已存在.")
+        utility.drop_collection(collection_name=MILVUS_COLLECTION_NAME)
+
+    field_id = FieldSchema(name=ID_FIELD_NAME, dtype=DataType.VARCHAR, is_primary=True, max_length=36)
+    field_text = FieldSchema(name=TEXT_FIELD_NAME, dtype=DataType.VARCHAR, max_length=65535) # 存储原始文本
+    field_embedding = FieldSchema(name=VECTOR_FIELD_NAME, dtype=DataType.FLOAT_VECTOR, dim=MILVUS_EMBEDDING_DIM)
+
+    schema = CollectionSchema(
+        fields=[field_id, field_text, field_embedding],
+        description="AI Agent Knowledge Base collection",
+        enable_dynamic_field=False # 动态字段 如果需要额外元数据且不想预定义，可以设为True
+    )
+    collection = Collection(MILVUS_COLLECTION_NAME, schema=schema)
+    print(f"集合 '{MILVUS_COLLECTION_NAME}' 创建成功.")
+
+    # 为向量字段创建索引
     index_params = {
-        "metric_type": "COSINE", 
-        "index_type": "HNSW",
-        "params": {"M": 16, "efConstruction": 200}
+        "metric_type": "L2", # 或 "IP" 
+        "index_type": "IVF_FLAT",
+        "params": {"nlist": 128},
     }
-    print("正在构建索引...")
-    collection.create_index(field_name="vector", index_params=index_params)
-    utility.index_building_progress(MILVUS_COLLECTION)
-    
-    # 8. Load
+    collection.create_index(field_name=VECTOR_FIELD_NAME, index_params=index_params)
+    print(f"为字段 '{VECTOR_FIELD_NAME}' 创建索引成功.")
     collection.load()
-    print("Milvus Collection Loaded ✅")
+    print(f"集合 '{MILVUS_COLLECTION_NAME}' 已加载.")
+    return collection
 
-# ==========================================
-# 2. ArangoDB 入库逻辑 (存内容图谱)
-# ==========================================
-def ingest_to_arango(chunks):
-    print("\n=== 开始写入 ArangoDB (内容层) ===")
-    
-    # 1. 连接
-    try:
-        sys_client = ArangoClient(hosts=ARANGO_URL)
-        sys_db = sys_client.db('_system', username=ARANGO_USER, password=ARANGO_PASS)
-        
-        # 创建数据库
-        if not sys_db.has_database(ARANGO_DB_NAME):
-            sys_db.create_database(ARANGO_DB_NAME)
-        
-        db = sys_client.db(ARANGO_DB_NAME, username=ARANGO_USER, password=ARANGO_PASS)
-    except Exception as e:
-        print(f"ArangoDB 连接失败: {e}")
+def insert_data_to_milvus(collection: Collection, texts: List[str]):
+    """将文本数据向量化并插入 Milvus"""
+    if not texts:
+        print("没有数据需要插入。")
         return
-    
-    COL_CHUNKS = "rag_chunks"
-    COL_RELATIONS = "rag_relations"
-    
-    # 2. 清理环境 (删除旧的 Graph 定义和 Collections)
-    # 先删 Graph，再删 Collection，否则会报错
-    if db.has_graph(ARANGO_GRAPH_NAME):
-        db.delete_graph(ARANGO_GRAPH_NAME)
-    if db.has_collection(COL_RELATIONS): db.delete_collection(COL_RELATIONS)
-    if db.has_collection(COL_CHUNKS): db.delete_collection(COL_CHUNKS)
-    
-    # 3. 创建 Collection
-    chunks_col = db.create_collection(COL_CHUNKS)
-    relations_col = db.create_collection(COL_RELATIONS, edge=True)
-    
-    # 4. 准备数据
-    batch_docs = []
-    batch_edges = []
-    
-    print("正在预处理数据...")
-    for chunk in chunks:
-        # 确保 cluster_id 存在，否则给默认值 -1
-        cid = chunk.get("cluster_id", -1)
-        if cid is None: cid = -1
 
-        doc = {
-            "_key": chunk["id"], 
-            "text": chunk["text"],
-            "cluster_id": int(cid),
-            "page": chunk["metadata"].get("page", -1),
-            "source": chunk["metadata"].get("source", "unknown")
-        }
-        batch_docs.append(doc)
-        
-        if chunk.get("next_chunk_id"):
-            edge = {
-                "_from": f"{COL_CHUNKS}/{chunk['id']}",
-                "_to": f"{COL_CHUNKS}/{chunk['next_chunk_id']}",
-                "type": "NEXT_TO"
-            }
-            batch_edges.append(edge)
+    print(f"正在为 {len(texts)} 条文本生成向量...")
+    vectors = embeddings_model.embed_documents(texts)
+    print("向量生成完毕。")
 
-    # 5. 批量写入 
-    print(f"正在批量写入 {len(batch_docs)} 个 Chunk...")
-    # on_duplicate="replace" 保证重复运行不报错
-    res_docs = chunks_col.import_bulk(batch_docs, on_duplicate="replace") 
-    if res_docs['errors'] > 0:
-        print(f"警告: Chunk 写入出现 {res_docs['errors']} 个错误! 详情: {res_docs['details']}")
-    
-    print(f"正在批量写入 {len(batch_edges)} 条关系...")
-    res_edges = relations_col.import_bulk(batch_edges, on_duplicate="replace")
-    if res_edges['errors'] > 0:
-        print(f"警告: 关系写入出现 {res_edges['errors']} 个错误! (可能是 next_id 不存在)")
+    # 准备插入数据
+    data_to_insert = []
+    for i, text_content in enumerate(texts):
+        data_to_insert.append({
+            ID_FIELD_NAME: str(uuid.uuid4()),
+            TEXT_FIELD_NAME: text_content,
+            VECTOR_FIELD_NAME: vectors[i]
+        })
 
-    # 6. 创建 Graph 定义 (方便在 Web UI 查看)
-    print("正在创建图谱定义 (Graph Definition)...")
-    edge_definitions = [
-        {
-            "edge_collection": COL_RELATIONS,
-            "from_vertex_collections": [COL_CHUNKS],
-            "to_vertex_collections": [COL_CHUNKS]
-        }
-    ]
-    db.create_graph(ARANGO_GRAPH_NAME, edge_definitions=edge_definitions)
-    
-    # 7. 创建索引
-    chunks_col.add_persistent_index(fields=["cluster_id"])
-    print("ArangoDB 入库 & 图谱构建完成 ✅")
-
-# ==========================================
-# 主程序
-# ==========================================
-if __name__ == "__main__":
-    data = load_json_data()
-    centroids = data.get("centroids", [])
-    chunks = data.get("chunks", [])
-    
-    if not centroids or not chunks:
-        print("错误: JSON 数据为空或格式不正确")
-        exit(1)
-
-    print(f"数据加载完毕: {len(centroids)} 个质心, {len(chunks)} 个文本块")
-    
-    # 执行写入
-    ingest_to_milvus(centroids)
-    ingest_to_arango(chunks)
-```
-
-### 怎么验证成功了？
-
-1.  **ArangoDB**: 浏览器打开 `http://127.0.0.1:8529`，登录 root/pass123。
-    *   选择数据库 `rag_db`。
-
-        ![alt](/images/arango_login.png)
-        
-    *   点左侧 **COLLECTIONS** -> `rag_chunks`。你应该能看到所有的文本块。
-
-        ![alt](/images/arango_rag_chunks.png)
-
-    *   点 **GRAPHS** -> Create Graph -> 选刚才那两个表 -> 随便点一个节点，看看能不能看到连线（NEXT_TO）。
-2.  **Milvus**: 使用 `Attu` (Milvus 的可视化工具) 或者单纯看 Python 脚本最后有没有打印 `Milvus Collection Loaded ✅`。
+    print(f"正在向 Milvus 集合 '{collection.name}' 插入 {len(data_to_insert)} 条数据...")
+    insert_result = collection.insert(data_to_insert)
+    collection.flush() # 确保数据持久化
+    print(f"数据插入成功. 影响行数: {insert_result.insert_count}")
+    print(f"当前集合实体数量: {collection.num_entities}")
 
 
-## 梳理
-
-下面就可以进行搜索了，但在进行搜索之前，我们需要梳理一下，为什么要这么设计，设计的细节你是否理解，存储的时候，milvus和arangodb是如何关联上的，存储的流程是怎么样的，先milvus再arangodb吗，然后存储的时候，这样设计是为了方便搜索吗，解决了什么问题
-
-
-我们现在停下来，不写代码，专门把 “为什么要这么设计” 和 “它们是怎么关联的” 这两个问题彻底拆解清楚。
-
-**1. 核心疑问：Milvus和ArangoDB是如何关联上的？**
-答案：通过cluster_id关联的。
-
-
-在存储的时候：
-* 我们算出这个N个Chunk可以分为k个类（聚类）。
-* 我们给其中的某个类分配了一个号码牌比如：cluster_id = 101
-* 我们告诉**Milvus**：号码牌101的特征是[0.1,0.9,0.3...]（聚类中心的质心向量）
-* 我们告诉**ArangoDB**：这些chunk都是属于101号的，给他们贴上cluster_id:101的标签
-
-在查询的时候：
-* 用户问某个类的名称
-* Milvus算了一下，说：去101号找
-* 你走到了ArangoDB，喊了一声：那些chunk是属于101号的，站出来！
-
-结论：Milvus和ArangoDB通过聚类id相关联，Milvus存ID->向量，ArangoDB存ID->正文
-
-**2. 存储流程：为什么是先算后存？**
-
-可能有种疑惑：先Milvus再ArangoDB吗？
-
-其实更准确的说法是：先内存计算，再双写分发。
-
-流程复盘：
-* 在Python内存里：这是最关键的一步，数据还没有进入数据库之前，已经在Python中进行了向量化和聚类
-    * 此时，每个chunk对象在内存中已经有了cluster_id这个属性
-* 分发：
-    * 只要内存里的数据有了cluster_id，那先写入谁并不重要。
-    * 为了代码逻辑清晰，通常并行写入，或者先写入Milvus建立目录，然后再写入ArangoDB。
-
-**3. 解决了什么问题？**
-
-既然有Milvus了，为什么不把text直接存在Milvus的payload中，为什么要搞俩数据库？
-
-问题1：显存太贵，HNSW索引太占用内存
-* 传统方法：把1000万条Chunk的向量全部建立HNSW索引。
-    * 后果：HNSW索引需要把向量加载到内存，1000万条 x 1024维 x 4字节 ≈ 40GB内存。
-* 我们的做法：Milvus只存1万个聚类质心
-    * 后果：1万条向量 ≈ 40MB内存
-    * 优势：内存占用降低1000倍
-
-问题2：语义检索的近视眼问题
-* 传统做法：Milvus搜出来一句话：净利润增长了10%
-    * 后果：LLM拿到这句话是懵的。谁的净利润？是集团的还是子公司的？是2023年的还是2022年的？
-* 我们的做法：ArangoDB存储了NEXT_TO和PARENT_OF关系。
-    * 优势：在查询到这句话的同时，顺着图关系，把它的父标题（华东分公司）和前一段（2023年财报摘要）一起抓出来。LLM瞬间看懂了，Milvus做不到这种图遍历查询
-
-问题3：搜索的漏斗效应
-* 传统做法：Top-K搜索（比如K= 5）
-    * 后果：如果相关内容有20段，你只召回了5段，剩下的15段丢了，这叫低召回率。
-* 我们的做法：先找相关的话题簇
-    * 优势：比如命中财务簇，我们把这个簇里的50个Chunk全部拿出来
-    * 结果：召回范围扩大了（Recall提升），然后再用Rerank模型精挑细选，这是一种广撒网，精捕捞的策略，适合长文档问答。
-
-## 检索
-
-这里我们会用到BGE-Reranker-Base重排序模型
-* 大小：模型文件只有1GB
-* 效果：是目前开源界性价比最高的重排序模型之一
-* 来源：我们这里用modelscope拉取
-
-
-```shell
-pip install modelscope
-```
-
-```python
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from modelscope import snapshot_download
-import numpy as np
-from pymilvus import connections, Collection
-from arango import ArangoClient
-from langchain_community.embeddings import ZhipuAIEmbeddings
-
-# ==========================================
-# 配置区域
-# ==========================================
-ZHIPU_API_KEY = ""
-
-# Milvus & ArangoDB (保持不变)
-MILVUS_HOST = "127.0.0.1"
-MILVUS_PORT = "19530"
-MILVUS_COLLECTION = "rag_cluster_centroids"
-ARANGO_URL = "http://127.0.0.1:8529"
-ARANGO_USER = "root"
-ARANGO_PASS = "pass123"
-ARANGO_DB_NAME = "rag_db"
-COL_CHUNKS = "rag_chunks"
-
-# 搜索参数
-TOP_K_CLUSTERS = 3
-TOP_K_FINAL = 5
-
-# ==========================================
-# 1. 初始化资源 (新增 Reranker 加载)
-# ==========================================
-class RerankerEngine:
-    def __init__(self):
-        print("正在下载/加载 BGE-Reranker 模型 (约1GB)...")
-        # 从 ModelScope 下载模型到本地缓存
-        model_dir = snapshot_download('Xorbits/bge-reranker-base', revision='master')
-        
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_dir)
-        self.model.eval() # 评估模式
-        
-        # 如果有N卡就用cuda，没有就cpu
-        self.device = 'cpu' 
-        self.model.to(self.device)
-        print("Reranker 模型加载完成 ✅")
-
-    def compute_score(self, query, candidates):
-        """
-        计算 (query, text) 对的相关性分数
-        """
-        pairs = [[query, doc['text'][:512]] for doc in candidates] # 截断一下防止爆显存
-        
-        with torch.no_grad():
-            inputs = self.tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=512)
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            scores = self.model(**inputs, return_dict=True).logits.view(-1,).float()
-            
-        return scores.cpu().numpy()
-
-def init_resources():
-    # 1. Milvus & Arango 
-    connections.connect("default", host=MILVUS_HOST, port=MILVUS_PORT)
-    milvus_col = Collection(MILVUS_COLLECTION)
-    milvus_col.load()
-    
-    client = ArangoClient(hosts=ARANGO_URL)
-    db = client.db(ARANGO_DB_NAME, username=ARANGO_USER, password=ARANGO_PASS)
-    
-    # 2. Embedding
-    embed_model = ZhipuAIEmbeddings(model="embedding-2", api_key=ZHIPU_API_KEY)
-    
-    # 3. Reranker
-    reranker = RerankerEngine()
-    
-    return milvus_col, db, embed_model, reranker
-
-# ==========================================
-# 2. 融合检索 (带 Rerank)
-# ==========================================
-def fusion_search(query: str, milvus_col, db, embed_model, reranker):
-    print(f"\n🔎 用户提问: 【{query}】")
-    
-    # --- Step 1 & 2: 粗排 (Routing) ---
-    print(">>> 1. Milvus 路由...")
-    q_vec = embed_model.embed_query(query)
-    
-    res = milvus_col.search(
-        data=[q_vec], anns_field="vector", 
-        param={"metric_type": "COSINE", "params": {"ef": 64}}, 
-        limit=TOP_K_CLUSTERS, output_fields=["cluster_id"]
-    )
-    target_ids = [hit.id for hit in res[0]]
-    
-    # --- Step 3: 召回 (Retrieval) ---
-    print(f">>> 2. ArangoDB 召回 (Cluster IDs: {target_ids})...")
-    aql = f"""
-    FOR c IN {COL_CHUNKS}
-        FILTER c.cluster_id IN @ids
-        RETURN {{ id: c._key, text: c.text, cluster_id: c.cluster_id }}
-    """
-    candidates = list(db.aql.execute(aql, bind_vars={"ids": target_ids}))
-    print(f"候选集数量: {len(candidates)}")
-    
-    if not candidates: return []
-
-    # --- Step 4: 精排 (Rerank) ---
-    print(f">>> 3. BGE-Reranker 精排中...")
-    scores = reranker.compute_score(query, candidates)
-    
-    # 把分数写回去
-    for i, doc in enumerate(candidates):
-        doc['score'] = float(scores[i])
-        
-    # 按分数降序
-    candidates.sort(key=lambda x: x['score'], reverse=True)
-    final_results = candidates[:TOP_K_FINAL]
-
-    # --- Step 5: 上下文扩展 ---
-    print(f">>> 4. 图谱上下文扩展...")
-    top_doc = final_results[0]
-    context_aql = """
-    FOR v, e, p IN 1..1 OUTBOUND @start_node rag_relations
-        FILTER e.type == 'NEXT_TO'
-        RETURN v.text
-    """
-    start_node_id = f"{COL_CHUNKS}/{top_doc['id']}" 
-    
-    next_texts = list(db.aql.execute(context_aql, bind_vars={"start_node": start_node_id}))
-    top_doc['next_text'] = next_texts[0] if next_texts else "(无后文)"
-
-    return final_results
-
-# ==========================================
-# 主程序
-# ==========================================
-if __name__ == "__main__":
-    col, db, embed, rerank = init_resources()
-    
-    while True:
-        q = input("\n请输入问题 (q退出): ").strip()
-        if q == 'q': break
-        if not q: continue
-        
-        try:
-            results = fusion_search(q, col, db, embed, rerank)
-            
-            print("\n" + "="*60)
-            for i, res in enumerate(results):
-                print(f"Rank {i+1} | Score: {res['score']:.4f} | Cluster: {res['cluster_id']}")
-                print(f"Content: {res['text'][:100]}...") 
-                if i == 0:
-                    print(f"Context+: {res.get('next_text', '')[:100]}...")
-                print("-" * 30)
-                
-        except Exception as e:
-            print(f"Error: {e}")
-```
-
-```python 
-import os
-from zhipuai import ZhipuAI
-
-# ==========================================
-# 配置
-# ==========================================
-ZHIPU_API_KEY = ""
-
-SYSTEM_PROMPT = """
-你是一个基于图谱增强的智能助手。你的任务是根据提供的【参考上下文】回答用户的问题。
-请注意：
-1. 仅根据参考信息回答，不要编造。
-2. 如果参考信息里没有答案，请直接说“根据现有文档无法回答”。
-3. 回答要条理清晰，如果参考了上下文的扩展内容，请自然地融合在回答中。
-"""
-
-# ==========================================
-# RAG 生成逻辑
-# ==========================================
-def generate_answer(client, query, search_results):
-    """
-    组装 Prompt 并调用 GLM-4 生成回答
-    """
-    if not search_results:
-        return "抱歉，知识库中没有找到相关内容。"
-
-    # 1. 构建上下文 (Context)
-    # 我们取 Top-3 的结果，并把 Top-1 的扩展上下文也拼进去
-    context_str = ""
-    
-    for i, res in enumerate(search_results[:3]):
-        context_str += f"--- 参考片段 {i+1} ---\n"
-        context_str += f"{res['text']}\n"
-        
-        # 如果是 Top-1 且有扩展内容，加上去
-        if i == 0 and res.get('next_text') and res['next_text'] != "(无后文)":
-            context_str += f"[后续内容]: {res['next_text']}\n"
-    
-    # 2. 组装最终 Prompt
-    user_prompt = f"""
-    用户问题: {query}
-    
-    【参考上下文】:
-    {context_str}
-    
-    请根据以上信息回答用户问题。
-    """
-    
-    # 3. 调用大模型 (GLM-4)
-    print(">>> 5. 正在思考并生成回答 (GLM-4)...")
-    response = client.chat.completions.create(
-        model="glm-4",  # 或者 glm-4-flash (更便宜)
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        stream=True, #以此获得打字机效果
-    )
-    
-    # 4. 流式输出
-    print("\n" + "="*20 + " AI 回答 " + "="*20)
-    full_answer = ""
-    for chunk in response:
-        content = chunk.choices[0].delta.content
-        print(content, end="", flush=True)
-        full_answer += content
-    print("\n" + "="*50)
-    
-    return full_answer
-
-# ==========================================
-# 主程序
-# ==========================================
-if __name__ == "__main__":
-    # 1. 初始化检索器 (Milvus, Arango, Reranker)
-    # 注意：这步比较慢，因为要加载 Reranker 模型，耐心等待
-    print("正在启动 RAG 系统，加载模型中...")
-    milvus_col, db, embed_model, reranker = init_resources()
-    
-    # 2. 初始化 LLM 客户端
-    llm_client = ZhipuAI(api_key=ZHIPU_API_KEY)
-    
-    print("\n RAG 系统已就绪！(输入 'q' 退出)")
-    
-    while True:
-        query = input("\n 请输入问题: ").strip()
-        if query.lower() == 'q': break
-        if not query: continue
-        
-        try:
-            # Step A: 检索 (Retrieval)
-            # 复用之前写好的融合检索函数
-            results = fusion_search(query, milvus_col, db, embed_model, reranker)
-            
-            # Step B: 生成 (Generation)
-            generate_answer(llm_client, query, results)
-            
-        except Exception as e:
-            print(f" 发生错误: {e}")
-```
-
-## 可视化界面
-
-运行gradio程序，出现了问题，请第一时间怀疑gradio的版本和python版本冲突
-
-```shell
-pip install gradio==4.44.1
-pip install --upgrade gradio gradio_client pydantic fastapi uvicorn
-```
-```python
-import os
-import gradio as gr
-from zhipuai import ZhipuAI
-
-# 1. 设置环境变量 (防止代理拦截 localhost)
-os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
-
-# 2. 尝试导入检索模块
+# 执行 Milvus 初始化
 try:
-    print(">>> 正在加载模型和数据库...")
-    milvus_col, db, embed_model, reranker = init_resources()
-    print(" 资源加载成功")
-except ImportError:
-    milvus_col = db = embed_model = reranker = None
+    knowledge_collection = create_milvus_collection_if_not_exists()
+
+    # 准备一些示例知识数据 (仅在首次运行时或需要时插入)
+    # 为避免重复插入，可以检查集合是否为空
+    if knowledge_collection.num_entities == 0:
+        print("知识库为空，准备插入示例数据...")
+        sample_knowledge = [
+            "Milvus 是一款开源的向量数据库，专为大规模向量相似性搜索和分析而设计。",
+            "AI Agent 可以利用 Milvus 作为其长期记忆存储和外部知识库。",
+            "LangGraph 是一个用于构建有状态、多参与者应用程序的库，特别适合构建复杂的 AI Agent。",
+            "向量数据库通过将数据转换为向量嵌入，并使用专门的索引进行高效的相似性搜索。",
+            "RAG (Retrieval Augmented Generation) 是一种结合了检索系统和生成模型的AI技术，可以提高生成内容的准确性和相关性。",
+            "太阳是太阳系的中心天体，其核心温度高达1500万摄氏度。",
+            "Python 是一种广泛使用的高级编程语言，以其简洁的语法和强大的库生态系统而闻名。",
+            "DataWhale 是国内领先的 AI 开源学习社区，成立于 2018 年，致力于推动人工智能领域的开源教育与协作学习。",
+            "DataWhale 社区覆盖全球 3500 多所高校，拥有数百万开发者，所有学习资料和项目代码均开源在 GitHub 上。",
+            "DataWhale 通过组织黑客松、组队学习和开源项目共建，帮助开发者系统掌握机器学习、大模型、向量数据库等前沿技术。",
+            "DataWhale 与 AMD、魔搭社区等机构合作，共同推动 ROCm 生态和国产 AI 基础设施的开发者生态建设。"
+        ]
+        insert_data_to_milvus(knowledge_collection, sample_knowledge)
+    else:
+        print(f"知识库中已有 {knowledge_collection.num_entities} 条数据，跳过示例数据插入。")
+
 except Exception as e:
-    print(f" 资源加载出错: {e}")
-    milvus_col = db = embed_model = reranker = None
-
-# 3. 配置 API
-ZHIPU_API_KEY = ""
-llm_client = ZhipuAI(api_key=ZHIPU_API_KEY)
-
-# 4. 核心逻辑函数 
-def chat_function(message, history):
-    """
-    history 现在的格式是: 
-    [{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': 'hello'}]
-    """
-    if not message:
-        yield history, ""
-        return
-    
-    # 追加用户消息 (字典格式)
-    history.append({"role": "user", "content": message})
-    yield history, "正在思考..."
-    
-    log_content = f"🔎 用户提问: {message}\n" + "-"*30 + "\n"
-    
-    try:
-        # A. 检索
-        results = []
-        if milvus_col:
-            log_content += ">>> Fusion Search...\n"
-            results = fusion_search(message, milvus_col, db, embed_model, reranker)
-            
-        if not results:
-            log_content += "⚠️ 未召回相关内容。\n"
-            context_str = ""
-        else:
-            # 记录 Top-1
-            top1 = results[0]
-            log_content += f"✅ Top-1 Score: {top1.get('score', 0):.4f} | Cluster: {top1['cluster_id']}\n"
-            log_content += f"📄 片段: {top1['text'][:50]}...\n"
-            if top1.get('next_text'):
-                log_content += f"🔗 扩展: {top1['next_text'][:30]}...\n"
-            
-            # 构建 Context
-            context_str = ""
-            for i, res in enumerate(results[:3]):
-                context_str += f"参考 {i+1}: {res['text']}\n"
-                if i == 0 and res.get('next_text'):
-                    context_str += f"[下文]: {res['next_text']}\n"
-
-        # B. 生成
-        if context_str:
-            user_prompt = f"用户问题: {message}\n\n【参考资料】:\n{context_str}\n\n请根据资料回答。"
-        else:
-            user_prompt = message # 没查到就直接问
-
-        log_content += ">>> GLM-4 Generating...\n"
-        
-        # 追加一个空的 AI 消息占位符
-        history.append({"role": "assistant", "content": ""})
-        yield history, log_content
-        
-        response = llm_client.chat.completions.create(
-            model="glm-4",
-            messages=[
-                {"role": "system", "content": "你是一个RAG助手。"},
-                {"role": "user", "content": user_prompt},
-            ],
-            stream=True,
-        )
-        
-        partial_answer = ""
-        for chunk in response:
-            if chunk.choices[0].delta.content:
-                partial_answer += chunk.choices[0].delta.content
-                # 更新最后一条消息的内容
-                history[-1]["content"] = partial_answer
-                yield history, log_content
-
-    except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
-        # 出错也更新进界面
-        if history[-1]["role"] == "assistant":
-            history[-1]["content"] = error_msg
-        else:
-            history.append({"role": "assistant", "content": error_msg})
-        yield history, log_content + "\n" + error_msg
-
-# 5. 构建界面对象
-with gr.Blocks(title="FusionGraph RAG", theme=gr.themes.Soft()) as demo:
-    gr.Markdown("## 🧠 FusionGraph RAG")
-    
-    with gr.Row():
-        with gr.Column(scale=2):
-            chatbot = gr.Chatbot(height=600, label="对话")
-            msg = gr.Textbox(label="问题", placeholder="请输入...")
-            clear = gr.Button("清空")
-
-        with gr.Column(scale=1):
-            log_box = gr.TextArea(label="思维链日志", lines=25, interactive=False)
-
-    # 绑定事件
-    msg.submit(chat_function, [msg, chatbot], [chatbot, log_box])
-    # 清空时返回空列表
-    clear.click(lambda: [], None, chatbot, queue=False)
-
-# 6. 启动
-if __name__ == "__main__":
-    print("启动中...")
-    demo.queue().launch(
-        server_name="127.0.0.1", 
-        server_port=9200, 
-        share=False,
-        inbrowser=True
-    )
+    print(f"Milvus 初始化或数据插入过程中发生错误: {e}")
+    # 在Notebook中，我们可能不希望程序因Milvus连接问题而完全停止后续单元格的执行
+    # 但后续依赖Milvus的单元格可能会失败
+    knowledge_collection = None # 标记为None，以便后续检查
 ```
+
+```python
+from typing import List, TypedDict, Annotated
+import operator
+from datetime import datetime
+from langgraph.graph import StateGraph, END
+from langchain_core.tools import tool
+from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
+from langchain_core.utils.function_calling import convert_to_openai_tool
+
+# 1. 定义工具
+@tool
+def search_milvus_knowledge_base(query: str) -> str:
+    """
+    从Milvus中查找与问题相关的信息。
+    输入的问题应是一个特定于milvus中存储的数据的问题
+    """
+    if not knowledge_collection:
+        return "Milvus knowledge base is not available."
+    print(f"\n[Tool Call: search_milvus_knowledge_base] Query: {query}")
+    query_vector = embeddings_model.embed_query(query)
+    
+    search_params = {
+        "metric_type": "L2",
+        "params": {"nprobe": 10},  # 基于索引类型和数据规模来定义nprobe大小
+    }
+    
+    # 执行搜索
+    results = knowledge_collection.search(
+        data=[query_vector],
+        anns_field=VECTOR_FIELD_NAME,
+        param=search_params,
+        limit=3,  # 返回前三条最相关的答案
+        expr=None,  # 可选择的标量过滤语句
+        output_fields=[TEXT_FIELD_NAME]  # 返回原始的内容字段
+    )
+    
+    context = ""
+    if results and results[0]:
+        context_docs = [hit.entity.get(TEXT_FIELD_NAME) for hit in results[0]]
+        context = "\n".join(context_docs)
+        print(f"[Tool Result] Found context: {context[:200]}...")
+    else:
+        print("[Tool Result] No relevant context found in Milvus.")
+        context = "No relevant information found in the knowledge base."
+    return context
+@tool
+def get_current_time(placeholder: str = "default") -> str: # Langchain tools often expect an input arg
+    """Returns the current date and time."""
+    print("\n[Tool Call: get_current_time]")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# 定义工具列表
+tools = [search_milvus_knowledge_base,get_current_time]
+
+# 2. 定义Agent状态
+# 这是典型的对话历史的存储方式
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], operator.add]  
+
+# 3. 定义节点
+def agent_node(state: AgentState) -> dict:
+    """
+    Agent node: 决定下一个行动是什么 (是调用工具还是直接回复).
+    """
+    print("\n[Node: Agent]")
+    # 向llm展示可用的工具都有哪些
+    bound_llm = llm.bind_tools(tools)
+    response = bound_llm.invoke(state["messages"])
+    # 展示Agent的决定
+    print(f"[Agent Decision] Response: {response.content}, Tool Calls: {response.tool_calls}")
+    return {"messages": [response]}
+
+def tool_node(state: AgentState) -> dict:
+    """
+    Tool node: 执行agent发起的工具调用
+    """
+    print("\n[Node: Tool Executor]")
+    last_message = state["messages"][-1]
+    
+    if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
+        print("[Tool Executor] No tool calls found in the last message.")
+        return {"messages": []}
+    
+    tool_messages = []
+    for tool_call in last_message.tool_calls:
+        tool_name = tool_call["name"]
+        tool_input = tool_call["args"]
+        
+        # 通过name查找对应的tool
+        tool = next((t for t in tools if t.name == tool_name), None)
+        if not tool:
+            tool_messages.append(
+                ToolMessage(
+                    content=f"Error: Tool {tool_name} not found.",
+                    tool_call_id=tool_call["id"]
+                )
+            )
+            continue
+        
+        try:
+            # 执行工具
+            result = tool.invoke(tool_input)
+            tool_messages.append(
+                ToolMessage(
+                    content=str(result),
+                    tool_call_id=tool_call["id"]
+                )
+            )
+        except Exception as e:
+            tool_messages.append(
+                ToolMessage(
+                    content=f"Error executing tool {tool_name}: {str(e)}",
+                    tool_call_id=tool_call["id"]
+                )
+            )
+    
+    print(f"[Tool Executor] Executed tools, results: {tool_messages}")
+    return {"messages": tool_messages}
+
+# 4. 定义情景上的边界
+def should_continue(state: AgentState) -> str:
+    """
+    决定什么时候继续调用工具还是结束
+    """
+    print("\n[Edge: should_continue]")
+    last_message = state["messages"][-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        print("[Edge Decision] Continue to 'tools'")
+        return "tools"
+    print("[Edge Decision] End")
+    return END
+
+# 5. 构建图
+workflow = StateGraph(AgentState)
+
+# 添加节点
+workflow.add_node("agent", RunnableLambda(agent_node))
+workflow.add_node("tools", RunnableLambda(tool_node))
+
+# 设置入口
+workflow.set_entry_point("agent")
+
+# 添加边界
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+    {
+        "tools": "tools",
+        END: END
+    }
+)
+
+# 添加工具到agent的连接
+workflow.add_edge("tools", "agent")
+
+# 编译
+app = workflow.compile()
+print("\nLangGraph App compiled successfully!")
+
+
+```
+
+```python
+from IPython.display import Image, display
+
+try:
+    display(Image(app.get_graph().draw_mermaid_png()))
+except Exception:
+    pass
+```
+
+```python
+if not knowledge_collection:
+    print(" Milvus 连接和集合初始化失败。")
+else:
+    print("Agent 已准备就绪。开始提问吧！(输入 'exit' 退出)")
+    print("-" * 30)
+
+    # 演示 Agent 使用 Milvus 作为外部知识库
+    print("\n--- 案例1: Agent 利用 Milvus 查找信息 ---")
+    query1 = "Milvus 是什么?"
+    print(f"User: {query1}")
+    inputs = {"messages": [HumanMessage(content=query1)]}
+    
+    # 使用 stream 方法逐步查看执行过程
+    for event in app.stream(inputs):
+        for key, value in event.items():
+            print(f"--- Event for Node: {key} ---")
+            if "messages" in value:
+                # 打印最新消息的内容
+                latest_message = value["messages"][-1]
+                if isinstance(latest_message, AIMessage):
+                    print(f"AI: {latest_message.content}")
+                    if latest_message.tool_calls:
+                        print(f"AI requests tool call: {latest_message.tool_calls}")
+                elif isinstance(latest_message, ToolMessage):
+                    print(f"Tool Result ({latest_message.tool_call_id}): {latest_message.content}")
+                else:
+                    print(f"Message ({type(latest_message).__name__}): {latest_message.content}")
+        print("-" * 10)
+    
+    print("\n--- 案例2: Agent 回答一个不需要查知识库的问题 (可能直接回答或拒绝) ---")
+    query2 = "你好吗？"
+    print(f"User: {query2}")
+    inputs = {"messages": [HumanMessage(content=query2)]}
+    # 获取最终结果
+    final_response = app.invoke(inputs)
+    if final_response and "messages" in final_response and final_response["messages"]:
+        print(f"AI: {final_response['messages'][-1].content}")
+    else:
+        print("AI 未能生成回复。")
+
+    # 演示 Agent 存储对话片段向量 (概念性，实际存储逻辑需要更完善)
+    # 假设 query1 和其最终回复是一个需要记忆的片段
+    if final_response and "messages" in final_response: # 使用上一个交互的结果
+        print("\n--- 概念演示: 存储对话到 Milvus (作为记忆) ---")
+        # 假设我们想要将用户的问题和Agent的最终回答作为一个记忆单元
+        # 这里的 final_response['messages'] 可能包含整个对话历史
+        # 我们通常取最后的用户问题和AI回答对
+        
+        # 找到 query1 对应的最终 AIMessage
+        # 这是一个简化的查找，实际中可能需要更复杂的逻辑来配对问答
+        q1_final_answer = ""
+        # 假设 app.invoke 返回的 messages 列表的最后一个是最终答案
+        if final_response['messages'] and isinstance(final_response['messages'][-1], AIMessage):
+             q1_final_answer = final_response['messages'][-1].content # 取决于上一个 invoke 的内容
+        
+        # 如果 query1 导致了工具调用，我们可能需要从 stream 中找到它的最终回答
+        # 为了简化，我们直接使用上面交互中打印的最终回答
+        # 真实场景下，我们会捕获 app.invoke(inputs1) 的最终 AIMessage
+
+        # 假设我们已经有了 query1 和 agent_final_answer_to_query1
+        # 这里我们手动设置一个示例，因为上面app.invoke(inputs)的最终结果是针对query2的
+        # 如果要精确获取query1的最终回答，需要重新运行app.invoke针对query1
+        # 或者从 app.stream 的事件中提取
+        
+        # 为了演示，我们假设第一个问题"Milvus是什么"的最终答案是 "Milvus是一个开源的向量数据库..." (由LLM结合搜索结果生成)
+        # 实际上，这个答案会在 stream 的某个 AIMessage 中出现
+        # 这里我们模拟一下，因为直接从上面的 stream 中捕获最终答案有点复杂
+        # 理想情况下，我们会有一个明确的 "final_answer" 状态或消息类型
+        
+        # 假设我们通过某种方式获取到了 query1 的最终AI回答
+        simulated_final_answer_to_query1 = "Milvus 是一款先进的开源向量数据库，非常适合AI应用中的大规模相似性搜索。它能帮助Agent快速从大量文档中找到相关信息。" # 这是一个模拟的最终回答
+
+        if simulated_final_answer_to_query1:
+            memory_text = f"用户问: {query1}\nAgent答: {simulated_final_answer_to_query1}"
+            print(f"准备将以下对话片段存入记忆库:\n{memory_text}")
+            
+            # 为了避免与知识库冲突，可以存入不同的集合或使用分区
+            # 这里简单演示存入同一个集合，实际应用中应分开
+            try:
+                # 为简化，我们假设有一个单独的记忆集合 memory_collection
+                # memory_collection = create_milvus_collection_if_not_exists("ai_agent_memory", ...)
+                # insert_data_to_milvus(memory_collection, [memory_text])
+                # 由于我们这里只有一个集合，就直接插入到 knowledge_collection，并作说明
+                print("注意: 实际应用中，对话记忆应存入专用集合或分区。此处为演示，插入当前知识库。")
+                insert_data_to_milvus(knowledge_collection, [memory_text])
+                print("对话片段已（概念性地）存入 Milvus 记忆库。")
+
+                # 如何在新对话开始时搜索相似历史 -> 召回相关记忆
+                new_user_query = "介绍一下向量数据库" # 一个新的，但与之前记忆相关的问题
+                print(f"\n新用户查询: {new_user_query}")
+                print("Agent (概念上) 将搜索 Milvus 记忆库以查找相似历史对话...")
+                # 实际操作：
+                # 1. new_user_query_vector = embeddings_model.embed_query(new_user_query)
+                # 2. search memory_collection with new_user_query_vector
+                # 3. retrieved_memories = results_from_memory_collection
+                # 4. Agent 使用 retrieved_memories 作为上下文辅助当前对话
+                # 这里我们用知识库搜索来模拟这个过程：
+                retrieved_memories = search_milvus_knowledge_base(new_user_query)
+                print(f"从Milvus中召回的（模拟的）相关记忆/知识:\n{retrieved_memories}")
+
+            except Exception as e:
+                print(f"存储或检索记忆时发生错误: {e}")
+        else:
+            print("未能获取到 query1 的最终回答，跳过记忆存储演示。")
+```
+## 讨论：Milvus 如何赋能 Agent 更智能地执行任务
+
+Milvus 通过其强大的向量存储和检索能力，可以从多个方面赋能 AI Agent，使其更智能：
+
+1.  **增强的知识获取与利用:**
+    *   **海量知识管理:** Agent 可以接入存储在 Milvus 中的大规模、多样化的外部知识，不再局限于模型预训练数据。
+    *   **语义理解:** 通过向量相似性搜索，Agent 能够理解查询的深层语义，而不是简单的关键词匹配，从而找到更相关的知识。
+    *   **动态知识更新:** Milvus 中的知识库可以随时更新，Agent 可以即时获取最新的信息，保持知识的时效性。
+
+2.  **更强大的记忆能力:**
+    *   **长期记忆的实现:** Milvus 为 Agent 提供了存储和检索长期记忆（如对话历史、用户偏好、学习经验）的有效机制。
+    *   **情境感知与个性化:** 通过检索相似的过去交互，Agent 可以更好地理解当前对话的上下文，提供更连贯和个性化的服务。例如，记住用户之前的选择或问题。
+    *   **持续学习与改进:** Agent 可以将成功的交互模式或解决问题的策略向量化存储，未来遇到类似情况时可以快速借鉴，实现持续学习和性能提升。
+
+3.  **提升任务执行效率与效果:**
+    *   **快速信息检索:** Milvus 的高效检索能力确保 Agent 能够迅速找到所需信息，减少任务执行的延迟。
+    *   **复杂问题解决:** 对于需要多方面知识的复杂问题，Agent 可以从 Milvus 中检索多个相关的知识片段，综合分析后给出答案。
+    *   **减少幻觉:** 通过 RAG 模式，Agent 的回答基于从 Milvus 检索到的实际数据，可以显著减少“幻觉”现象，提高回答的准确性和可靠性。
+
+4.  **支持更复杂的 Agent 行为:**
+    *   **主动学习与探索:** Agent 可以将探索到的新知识、新环境信息向量化存入 Milvus，用于未来的规划和决策。
+    *   **多 Agent 协作:** 多个 Agent 可以共享同一个 Milvus 实例作为知识或记忆中心，促进协作和知识共享。
+
+总之，Milvus 为 AI Agent 提供了一个坚实的数据基础，使其能够更有效地存储、管理和利用信息，从而在理解、规划、学习和交互等各个方面表现得更加智能。
+
+## Hands-on Exercise 3: 实操AI Agent Demo
+
+**目标:** 体验并扩展我们刚刚构建的 AI Agent。
+
+**任务:**
+
+1.  **运行并理解 Agent:**
+    *   确保你的 API Key 已正确设置，并且 Milvus 服务正在运行。
+    *   逐个执行上面的 Jupyter Notebook 单元格。
+    *   观察 Agent 在处理不同类型问题时的行为：
+        *   哪些问题触发了 `search_milvus_knowledge_base` 工具？
+        *   Agent 如何利用从 Milvus 返回的信息来构建答案？
+        *   Agent 如何处理不需要外部知识的问题？
+    *   仔细阅读 `app.stream(inputs)` 的输出，理解 LangGraph 中节点的流转过程。
+
+2.  **扩展知识库:**
+    *   在 `Cell 3` (Milvus Setup and Helper Functions) 中，找到 `sample_knowledge` 列表。
+    *   向该列表添加几条你自定义的知识条目（例如，关于某个特定技术、历史事件或你感兴趣的任何主题）。
+        *   **重要:** 添加新知识后，你需要一种方式来重新运行 `insert_data_to_milvus` 函数。你可以：
+            *   简单地删除 Milvus collection（如果只是测试），然后重新创建并插入所有数据：`utility.drop_collection(MILVUS_COLLECTION_NAME)`（请谨慎操作！）。
+            *   或者，修改代码，使其只插入新的、尚未存在的条目（这更复杂，需要检查数据是否已存在）。
+            *   对于本练习，最简单的方法是：如果 `knowledge_collection.num_entities > 0`，先 `utility.drop_collection(MILVUS_COLLECTION_NAME)`，然后再调用 `create_milvus_collection_if_not_exists()` 和 `insert_data_to_milvus()`。**请注意，这将删除所有现有数据。**
+    *   重新运行相关的单元格以更新 Milvus 中的数据。
+    *   向 Agent 提问，测试它是否能利用你新添加的知识。
+
+3.  **(可选) 尝试不同的查询:**
+    *   构造一些更复杂的查询，看看 Agent 如何响应。
+    *   尝试一些模棱两可的查询，观察 Agent 是否会尝试澄清或依赖其内部知识。
+
+4.  **(进阶可选) 添加一个新的简单工具:**
+    *   例如，添加一个 `get_current_time` 工具，它不查询 Milvus，只是返回当前时间。
+        ```python
+        from datetime import datetime
+
+        @tool
+        def get_current_time(placeholder: str = "default") -> str: # Langchain tools often expect an input arg
+            """Returns the current date and time."""
+            print("\n[Tool Call: get_current_time]")
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ```
+    *   将这个新工具添加到 `Cell 4` 的 `tools` 列表中: `tools = [search_milvus_knowledge_base, get_current_time]`。
+    *   重新编译 `app = workflow.compile()`。
+    *   向 Agent 提问，例如 "现在几点了？"，看看它是否会使用这个新工具。
+
+**思考与记录:**
+
+*   你认为 Milvus 在这个 Agent 中最大的价值是什么？
+*   如果让你进一步改进这个 Agent，你会从哪些方面入手？（例如，更精细的记忆管理、更复杂的规划逻辑、更多的工具等）
+
+
+## 最后
+
+Hands-on Exercise 3: 实操AI Agent Demo中的4个任务，相关答案在本章节对应的ipynb文件中，可以直接运行看到效果。
+
+本文主要参考Milvus大佬的workshop项目，其中文字和代码部分全部来自该项目，但为了适配国内环境以及方便学习者使用，对代码部分进行了部分删改并为代码增加更详细的注释。
+
+## Reference
+1. milvus-workshop（https://github.com/richzw/milvus-workshop）

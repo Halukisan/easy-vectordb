@@ -233,27 +233,33 @@ export default defineConfig({
       ],
       '/projects/': [
         {
-          text: '实战项目1',
-          items: [
-            { text: '基于FAISS框架RAG实战项目', link: '/projects/project1/README' }
-          ]
-        },
-        {
-          text: '实战项目2',
-          items: [
-            { text: '基于Milvus框架的Agent项目', link: '/projects/project2/README' }
-          ]
-        },
-        {
-          text: '实战项目3',
-          items: [
-            { text: '基于Milvus和ArangoDB的RAG系统', link: '/projects/project3/README' }
-          ]
-        },
-        {
           text: '实战概览',
           items: [
             { text: '项目概览', link: '/projects/' }
+          ]
+        },
+        {
+          text: '实战项目1 · 入门',
+          items: [
+            { text: '基于Annoy的推荐系统召回', link: '/projects/project1/README' }
+          ]
+        },
+        {
+          text: '实战项目2 · 基础',
+          items: [
+            { text: '基于FAISS框架RAG实战项目', link: '/projects/project2/README' }
+          ]
+        },
+        {
+          text: '实战项目3 · 进阶',
+          items: [
+            { text: '基于Milvus框架的Agent项目', link: '/projects/project3/README' }
+          ]
+        },
+        {
+          text: '实战项目4 · 综合',
+          items: [
+            { text: '基于Milvus和ArangoDB的RAG系统', link: '/projects/project4/README' }
           ]
         }
       ]
