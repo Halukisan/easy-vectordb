@@ -222,12 +222,41 @@ trainer.fit(train_dl)
 训练完成后，使用模型分别推理出用户 Embedding 和物品 Embedding，然后用 Annoy 构建物品向量索引，实现高效的近似最近邻召回。
 
 ```python
+<<<<<<< HEAD
 # 推理 Embedding
 user_embedding = trainer.inference_embedding(model=model, mode="user", data_loader=test_dl, model_path=save_dir)
 item_embedding = trainer.inference_embedding(model=model, mode="item", data_loader=item_dl, model_path=save_dir)
 
 # 使用 Annoy 构建索引并召回
 from torch_rechub.utils.match import Annoy
+=======
+class FaissVectorStore:
+    def __init__(self, dimension: int):
+        """初始化 Faiss 向量数据库"""
+        self.dimension = dimension
+        self.texts = []
+        self.embeddings = []
+        self.metadata = []
+        self.index = faiss.IndexFlatIP(dimension)  # 使用内积 (Inner Product) 进行余弦相似度搜索
+    
+    def add_vectors(self, embeddings: List[List[float]], texts: List[str], metadata: Optional[List[Dict[str, Any]]] = None):
+        """向数据库添加向量及其对应的文本内容，可选添加元数据"""
+        embeddings_array = np.array(embeddings, dtype=np.float32)
+        
+        # 归一化以支持余弦相似度
+        norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+        embeddings_array = embeddings_array / (norms + 1e-8)  # 添加极小值防止除以零
+        
+        self.index.add(embeddings_array)
+        self.texts.extend(texts)
+        self.embeddings.extend(embeddings)
+        
+        # 添加元数据（如果未提供，则默认为空字典）
+        if metadata:
+            self.metadata.extend(metadata)
+        else:
+            self.metadata.extend([{} for _ in texts])
+>>>>>>> 2d971f1 (fix code)
 
 annoy = Annoy(n_trees=10)
 annoy.fit(item_embedding)
