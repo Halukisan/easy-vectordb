@@ -395,8 +395,10 @@ for i, params in enumerate(random_params_list):
 # 输出随机搜索结果
 print("\n" + "="*30)
 if best_random_params is not None:
+    # 重新评估最优参数以获取完整指标
+    best_random_recall, _, best_random_build_time = evaluate_hnsw(best_random_params, xb, xq, I_gt, k)
     print(f"随机搜索最优参数：{best_random_params}")
-    print(f"对应Recall@{k}: {recall_at_k(evaluate_hnsw(best_random_params, xb, xq, I_gt, k)[0], I_gt, k):.4f}")
+    print(f"对应Recall@{k}: {best_random_recall:.4f}")
     print(f"对应QPS: {best_random_qps:.0f}")
 else:
     print("随机搜索中没有找到满足Recall≥0.9的参数组合")
@@ -445,8 +447,10 @@ for i, params in enumerate(grid_params_list):
 # 输出网格搜索结果
 print("\n" + "="*30)
 if best_grid_params is not None:
+    # 重新评估最优参数以获取完整指标
+    best_grid_recall, _, best_grid_build_time = evaluate_hnsw(best_grid_params, xb, xq, I_gt, k)
     print(f"网格搜索最优参数：{best_grid_params}")
-    print(f"对应Recall@{k}: {recall_at_k(evaluate_hnsw(best_grid_params, xb, xq, I_gt, k)[0], I_gt, k):.4f}")
+    print(f"对应Recall@{k}: {best_grid_recall:.4f}")
     print(f"对应QPS: {best_grid_qps:.0f}")
 else:
     print("网格搜索中没有找到满足Recall≥0.9的参数组合")
