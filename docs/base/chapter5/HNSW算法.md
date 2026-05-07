@@ -207,44 +207,36 @@ class SimpleHNSW:
         return np.sqrt(np.sum((a - b) ** 2))
     
     def _search_layer(self, query, entry_point, ef, layer):
-        """
-        在指定层搜索最近邻
-        
-        参数:
-        - query: 查询向量
-        - entry_point: 搜索起始点
-        - ef: 搜索范围（返回的候选点数量）
-        - layer: 搜索的层级
-        """
         if entry_point is None or entry_point not in self.layers[layer]:
             return []
             
         visited = set([entry_point])
-        # 候选集：存储(距离, 节点ID)元组，从入口点开始
         candidates = [(self._euclidean_distance(query, self.data_points[entry_point]), entry_point)]
-        # 使用堆来维护候选集（这里简化为列表排序）
-        results = []
+        results = [(candidates[0][0], entry_point)]  # 入口点直接加入结果
         
-        while candidates and len(results) < ef:
-            # 获取距离最近的候选点
+        while candidates:
             candidates.sort(key=lambda x: x[0])
             current_dist, current_point = candidates.pop(0)
             
-            # 检查是否应该将当前点加入结果
-            if not results or current_dist < results[-1][0]:
-                results.append((current_dist, current_point))
-                results.sort(key=lambda x: x[0])  # 保持结果按距离排序
-                if len(results) > ef:
-                    results = results[:ef]  # 限制结果集大小
+            # 关键终止条件：最近候选比最远结果还远，不可能找到更好的了
+            if results and current_dist > results[-1][0]:
+                break
             
-            # 探索当前点的所有邻居节点
             for neighbor in self.layers[layer][current_point]:
                 if neighbor not in visited:
                     visited.add(neighbor)
                     dist = self._euclidean_distance(query, self.data_points[neighbor])
-                    candidates.append((dist, neighbor))
+                    
+                    # 加入结果的条件：结果未满 OR 比最远结果更近
+                    if len(results) < ef or dist < results[-1][0]:
+                        results.append((dist, neighbor))
+                        results.sort(key=lambda x: x[0])
+                        if len(results) > ef:
+                            results = results[:ef]
+                        candidates.append((dist, neighbor))
         
         return results
+
     
     def add_point(self, point):
         """
