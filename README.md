@@ -1,10 +1,7 @@
 <div align='center'>
     <img src="./logo.png" alt="alt text" width="100%">
-    <h1>Easy-vecDB（⚠️ Alpha内测版）</h1>
+    <h1>Easy-vecDB</h1>
 </div>
-
-> [!CAUTION]
-> ⚠️ Alpha内测版本警告：此为早期内部构建版本，尚不完整且可能存在错误，欢迎大家提Issue反馈问题或建议。
 
 <div align="center">
 
