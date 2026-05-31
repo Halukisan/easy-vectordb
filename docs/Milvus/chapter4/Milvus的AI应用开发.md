@@ -211,7 +211,7 @@ class MilvusSchemaDesigner:
         # 准备索引参数
         index_params = self.client.prepare_index_params()
 
-        # 添加向量索引（使用IVF_FLAT）
+        # 添加向量索引（FLAT）
         index_params.add_index(
             field_name="embedding",
             index_type="FLAT",
