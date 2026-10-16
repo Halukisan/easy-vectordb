@@ -61,7 +61,7 @@ EDITOR:END -->
 
 <!-- EDITOR:BEGIN 7.5.3.6
 🎯 要求：本章高潮。给一份完整调用（含 filter、排序、聚合分面、重排阶段），并贴真实返回片段，指出"过去要 3 次请求 + 客户端拼装"。
-🔗 参考：https://milvus.io/docs/search-aggregation.md ｜ https://milvus.io/docs/single-vector-search.md#Sort-Search-Results-by-Scalar-Fields--Milvus-30x ｜ https://milvus.io/docs/model-ranker-overview.md ｜ https://milvus.io/docs/boost-ranker.md ｜ https://milvus.io/docs/multi-vector-search.md
+🔗 参考：https://milvus.io/docs/search-aggregation.md ｜ https://milvus.io/docs/single-vector-search.md （找页内小节 "Sort Search Results by Scalar Fields"） ｜ https://milvus.io/docs/model-ranker-overview.md ｜ https://milvus.io/docs/boost-ranker.md ｜ https://milvus.io/docs/multi-vector-search.md
 EDITOR:END -->
 
 ### 7.5.3.7 发布前打快照与回滚演练

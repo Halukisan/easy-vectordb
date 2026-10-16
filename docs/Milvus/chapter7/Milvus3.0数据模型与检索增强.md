@@ -81,7 +81,7 @@ EDITOR:END -->
 
 <!-- EDITOR:BEGIN 7.3.3.3
 🎯 要求：一张对比表（集合级 TTL vs 行级 TTL：作用范围/配置位置/依赖字段/清理粒度），这是最容易写混的地方。
-🔗 参考：https://milvus.io/docs/set-collection-ttl.md#Set-entity-level-TTL--Milvus-30x ｜ https://milvus.io/docs/timestamptz-field.md
+🔗 参考：https://milvus.io/docs/set-collection-ttl.md （找页内小节 "Set entity-level TTL"） ｜ https://milvus.io/docs/timestamptz-field.md
 🚫 去重边界：Ch3（3.9.5 数据自动过期 = 集合级 TTL）已写旧机制，**只写差异，不重讲集合级用法**。
 ⚠️ 必须提醒：过期不等于合规删除，敏感数据另议。
 EDITOR:END -->
@@ -121,7 +121,7 @@ EDITOR:END -->
 
 <!-- EDITOR:BEGIN 7.3.5.1
 🎯 要求：先给"2.6 只能客户端排"的痛点，再给 3.0 写法；给多字段升降序 + 与 topk 交互的说明。
-🔗 参考：https://milvus.io/docs/single-vector-search.md#Sort-Search-Results-by-Scalar-Fields--Milvus-30x
+🔗 参考：https://milvus.io/docs/single-vector-search.md （找页内小节 "Sort Search Results by Scalar Fields"）
 🚫 去重边界：Ch3（3.5.1 普通向量检索）不重讲，只写排序参数。
 EDITOR:END -->
 
@@ -129,7 +129,7 @@ EDITOR:END -->
 
 <!-- EDITOR:BEGIN 7.3.5.2
 🎯 要求：一段代码给出 COUNT/SUM/AVG/MIN/MAX + group-by 的返回样例（贴真实输出 JSON）。
-🔗 参考：https://milvus.io/docs/get-and-scalar-query.md#Aggregate-Query-Results--Milvus-30x ｜ https://milvus.io/docs/search-aggregation.md
+🔗 参考：https://milvus.io/docs/get-and-scalar-query.md （找页内小节 "Aggregate Query Results"） ｜ https://milvus.io/docs/search-aggregation.md
 🚫 去重边界：Ch3（3.6.4 统计查询）是客户端聚合/过取老写法——**必须画一张"旧写法 vs 新写法"两步对照**，这是本节最大价值。
 ⚠️ 提醒读者：统计口径是"命中集合"而非"全表"时，要写清 filter 的作用范围。
 EDITOR:END -->
