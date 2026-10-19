@@ -37,11 +37,11 @@ EDITOR:END -->
 
 ### 三条阅读路线
 
-| 你的目的 | 读这些 | 大约耗时 |
-|---|---|---|
-| 快速判断“要不要升级” | 7.1.2 → 7.1.3 → 7.2.3 → 7.3.5 → 7.5.6 | 30 分钟 |
-| 动手跑一遍新能力 | 7.1.5 → 7.2 → 7.3 | 2 小时 |
-| 做上线评估 | 7.1.4 → 7.4.6 → 7.5.5 | 半天 |
+三条路线按目的分：
+
+- **只想判断要不要升级**：走 7.1.2 → 7.1.3 → 7.2.3 → 7.3.5 → 7.5.6，大约 30 分钟；
+- **要动手跑一遍新能力**：先读 7.1.5 把环境定下来，再做 7.2 与 7.3，约 2 小时；
+- **在做上线评估**：按 7.1.4 过一遍开关与升级操作，再看 7.4.6 的写入引擎形态与 7.5.5 的代价观察，需要半天。
 
 ### 读之前需要什么
 
@@ -80,7 +80,7 @@ EDITOR:END -->
 ### 7.1.2.2 beta 与 GA 的两步节奏
 
 <!-- EDITOR:BEGIN 7.1.2.2
-【本节要写什么】一小段 + 一张两列表（beta 立骨架 / GA 补闭环）。
+【本节要写什么】一小段 + 两段对照着写（beta 立骨架 / GA 补闭环），不要做成表格。
 【先读这些】https://milvus.io/docs/release_notes.md#v30-beta ｜ https://github.com/milvus-io/milvus/releases/tag/v3.0.0 （"What's new in 3.0.0 (since 3.0-beta)"）
 【必须注意】
 ・beta 首次出现＝外部集合、快照、TTL、ORDER BY、查询聚合、MinHash、EmbList+DiskANN、Woodpecker、Storage V3；GA 补＝外部集合工作流完整、在线加列/回填/删列、schema 与索引同步演进、重排函数链、聚合上搜索路径（分面）、稀疏索引换代、超大规模优化、索引引擎直通、Woodpecker 独立部署。
@@ -107,19 +107,19 @@ EDITOR:END -->
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
-## 7.1.3 版本矩阵与客户端门槛
+## 7.1.3 版本对照与客户端门槛
 
-### 7.1.3.1 服务端与 SDK 对照表
+### 7.1.3.1 服务端与 SDK 对照说明
 
 <!-- EDITOR:BEGIN 7.1.3.1
-【本节要写什么】只放一张表，不写步骤。列＝Milvus / pymilvus / Node.js SDK / Java SDK / Go SDK。
+【本节要写什么】用分点写清，不做成表格，也不写操作步骤。逐项给出 Milvus、pymilvus、Node.js SDK、Java SDK、Go SDK 的对应版本。
 【先读这些】https://github.com/milvus-io/milvus/releases/tag/v3.0.0 ｜ https://milvus.io/docs/install-overview.md ｜ https://milvus.io/docs/release_notes.md
 【必须注意】
 ・v3.0.0 官方配套＝Milvus 3.0.0 / pymilvus 3.0.1 / Node.js 3.0.3 / Java 3.0.5 / Go 3.0.0；pymilvus 现行 3.0.2。
 ・️ 关键提醒：服务端 3.0.x 与 Lite 的 3.1/3.2.x 是两套号段，别写成"Milvus Lite 3.0"。
 ・Chapter 1（1.3.3）已对比过 Lite/Standalone/集群的差异定位，此处只做版本与 SDK 对应。
-・配套矩阵以 GitHub v3.0.0 release 页为准：Milvus 3.0.0 / pymilvus 3.0.1 / Node 3.0.3 / Java 3.0.5 / Go 3.0.0；pymilvus 现行 3.0.2。Lite 是另一套号段，禁止写"Milvus Lite 3.0"。
-【写完自检】表能当速查卡用；读者不看正文也能据此做决定。
+・版本对应关系以 GitHub v3.0.0 release 页为准：Milvus 3.0.0 / pymilvus 3.0.1 / Node 3.0.3 / Java 3.0.5 / Go 3.0.0；pymilvus 现行 3.0.2。Lite 是另一套号段，禁止写"Milvus Lite 3.0"。
+【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
@@ -158,7 +158,7 @@ EDITOR:END -->
 【先读这些】https://milvus.io/docs/upgrade_milvus_standalone-docker.md ｜ https://milvus.io/docs/upgrade_milvus_cluster-helm.md ｜ https://milvus.io/docs/upgrade_milvus_standalone-operator.md ｜ https://milvus.io/docs/upgrade_milvus_cluster-operator.md
 【必须注意】
 ・升级前必看 preupgrade 检查项；2.6→3.0 可回滚的前提是没有启用改序列化格式的特性；升级后索引版本/元数据的处理。
-・️ 建议配一张决策表：要用快照/TEXT？→ 要开 Loon？→ 开了就不能回滚 → 先在实验环境演练。
+・️ 建议写成一段判断路径：要用快照或 TEXT 吗？→ 那就必须开 Loon；→ 开了还能回滚吗？→ 不能，所以先在实验环境演练一遍。
 【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
@@ -192,7 +192,7 @@ EDITOR:END -->
 ### 7.1.4.5 客户端 pymilvus 升级
 
 <!-- EDITOR:BEGIN 7.1.4.5
-【本节要写什么】一行安装命令 + 一张"后续子章节会用到哪些新客户端能力"预告表（只列名，不讲用法）。
+【本节要写什么】一行安装命令 + 一段预告：后续子章节会用到哪些新的客户端能力（只列名，不讲用法）。
 【先读这些】https://milvus.io/docs/install-pymilvus.md ｜ https://milvus.io/docs/using_milvusclient.md ｜ https://github.com/milvus-io/pymilvus/releases
 【必须注意】
 ・pip install -U "pymilvus>=3.0.1,<3.1"。3.0.x 客户端线索：alter_collection_schema()（在线改 schema）、FunctionChain 与 XGBoost 表达式辅助、Bloom/Roaring bitmap 构建器、搜索聚合与 group_by_fields、compaction 生命周期观测、dump_messages / get_replicate_info、DataType.TEXT、alter_role/describe_role。
@@ -203,17 +203,17 @@ EDITOR:END -->
 
 ## 7.1.5 三种形态的支持边界
 
-### 7.1.5.1 特性 × 形态支持矩阵
+### 7.1.5.1 各特性在三种形态下的支持情况
 
 <!-- EDITOR:BEGIN 7.1.5.1
-【本节要写什么】一张表。行＝外部集合 / 快照 / Storage V3 / TEXT / StructArray / 服务端排序聚合与分面 / Function Chain / 新版稀疏索引 / Woodpecker / Force Merge；列＝Lite / Standalone / 集群 / 备注。
+【本节要写什么】逐个特性说明它在 Milvus Lite、单机 Standalone、集群三种形态下能不能用、有什么前提：外部集合、快照、Storage V3、TEXT、StructArray、服务端排序聚合与分面、Function Chain、新版稀疏索引、Woodpecker、Force Merge。
 【先读这些】https://milvus.io/docs/milvus_lite.md ｜ https://milvus.io/docs/install-overview.md ｜ https://milvus.io/docs/woodpecker.md ｜ https://pypi.org/project/milvus-lite/
 【必须注意】
 ・Lite 是嵌入式引擎，其 snapshot 概念（钉住不可变数据/增量/索引文件并保存 schema 与 manifest 副本）≠ 服务端快照特性，必须显式区分，否则读者会拿 Lite 去试外部集合。
 ・️ 官方未逐项明示 Lite 的 3.0 能力边界：不确定的格子写"待验证"，不要猜。
 ・Chapter 1（1.3.3）与 Chapter 6《Milvus Lite部署与应用》已讲形态定位与 Lite 装法，此处只填这张新表。
 ・先给表再给替代观察方式；Lite 对本章特性的支持以 milvus_lite.md 现文为准，未写明就标"待验证"，不要替官方下结论。
-【写完自检】表能当速查卡用；读者不看正文也能据此做决定。
+【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
@@ -233,7 +233,7 @@ EDITOR:END -->
 <!-- EDITOR:BEGIN 7.1.6
 【本节要写什么】沿用你既有模板——`本章核心掌握：` + 3–5 条 + 一句衔接（"7.2 起在此环境上实操新特性"）。
 【必须注意】
-・️ 本章只保留三张表（版本矩阵 / SDK 对照 / 支持矩阵）+ 升级操作，特性原理一律不写，防止与 7.2–7.4 重复。
+・️ 本章只保留三块内容——版本对照、SDK 对照、三种形态的支持情况——加上升级操作，特性原理一律不写，防止与 7.2–7.4 重复。
 【写完自检】以「本章核心掌握：」起头；只看小结也能复述本章三条主线。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->

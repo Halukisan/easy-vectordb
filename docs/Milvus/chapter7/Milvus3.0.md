@@ -10,255 +10,212 @@
      { text: '数据模型与检索增强', link: '/Milvus/chapter7/Milvus3.0数据模型与检索增强' },
      { text: '索引与写入引擎', link: '/Milvus/chapter7/Milvus3.0索引与写入引擎' },
      { text: '端到端实战', link: '/Milvus/chapter7/Milvus3.0端到端实战' } ] },
-   落稿前请你用浏览器复核三处（本机访问不到 milvus.io，无法核对页面级细节）：
-   1) 7.0.4.2 表格里配置项的确切键名与默认值，是否与 v3.0.2 文档一致；
-   2) 7.0.4.3 表格右列指向的小节号，与你最终定稿的章节号是否一致；
-   3) 正文目前没有遗留"待验证"标记；若你后续增补内容拿不准，请显式加"待验证"再删。
 
-   本轮已按官方原文做过的事实修订（无需再查，但要防你后续改回去）：
-   ・v3.0.2 那行删掉了"若干默认关闭的能力开始朝默认启用推进"——v3.0.2 的 Improvements 里没有这条，已改为可核内容
-     （membership_match 统一表达式、外部集合自定义 S3 兼容端点、REST v2 队列满限流）。
-   ・"在线加列"从 beta 改为 GA 全流程一行，并注明加列本身 v2.6.0 已有（Add Field）。
-   ・"向量字段可为 NULL"标注最早见于 v2.6.18；3.0 的增量是覆盖全部六种向量类型。
-   ・StructArray 由"beta 新增"改为"GA 覆盖面补齐"，因为 array-of-structs / struct-array-operators 两页在 v2.6.x 文档里就已存在。
-   ・JSON 那行改列 v2.6.x 真实存在的能力（运算符 / Shredding / Flat 索引 Beta），并明确 3.0 未列为新增。
-   ・纠偏清单新增 StructArray、向量可空两行。
-   证据来源：milvus-docs 仓库 v3.0.x 与 v2.6.x 的 menuStructure/en.json 页面差集 + 两分支 release_notes.md 原文 +
-   github.com/milvus-io/milvus 各 tag 页与 releases.atom 的发布日期。
+   排版约定（按你的要求：不用表格）：全篇用段落、无序列表、**加粗**、`> 💡 / ⚠️ / ⛳` 注释块；
+   需要精确口径处直接引用官方英文原文（release notes），引用块内保留英文、块外给中文解释。
+
+   请你用浏览器复核两处（本机访问不到 milvus.io，无法核对页面级细节）：
+   1) 7.0.4.2 列出的配置项键名与默认值，是否与 v3.0.2 文档页一致；
+   2) 各处指向的小节号（7.1.4 / 7.2.2 / 7.3.5 等）与你最终定稿的章节号是否一致。
+
+   已核实的事实来源：milvus-docs 仓库 v3.0.x 与 v2.6.x 的 site/en/release_notes.md 原文、
+   两分支 menuStructure/en.json 的页面差集、github.com/milvus-io/milvus 的 tag 页与 releases.atom 日期。
+   本轮新核到：**3.0-beta 的发布日期是 2026-05-09**（release notes 原文 "## v3.0-beta / Release date: May 9, 2026"），
+   上一版正文只写"2026 年"，现已补上确切日期。
+
+   原文与解释的边界：引用块里的英文一律是官方原文，可追溯到 milvus-docs 的 release_notes.md 或
+   site/en/userGuide/schema/array-of-structs.md；凡出现"可以这样理解""本篇不展开公式"的，是教程解释，不是官方结论。
+   已据此删掉的作者推断：外部集合的写入路径与可见性时机、快照"可复现"、2.x"服务端只按 top-k"、
+   "不能给已有 StructArray 加子字段"（这四处原文都没有）。
 EDITOR:END -->
 
-Milvus 3.0 于 2026 年 7 月 29 日发布首个正式版本（v3.0.0），截至本文撰写，3.0 线已经走到 v3.0.3。作为一个 major 版本，它带来的不是"多几个参数、多几个索引类型"，而是把几件在 2.x 里**必须由应用在库外完成的事**，变成了数据库内部的一等能力。
+本章将介绍Milvus 3.0 新版本，AI时代，是否还有必要手动编写教程一直都是值得我们DW思考的事情，大可以告诉自己的 AI 助手：“帮我查询Milvus官方文档，告诉我3.0版本都更新了什么”。然后AI会给你输出一大串的内容，详细的告诉你新版本都更新了什么，并且还会附带一张和旧版本对比的表格。下意识的指令和流水似的答案，无论是输入还是输出都没有神经元的信号跳动，答案宛如回家吃饭一样顺其自然的出现，“妈妈会做好饭然后喊我吃饭的”，日复一日的习惯，养成了衣来伸手饭来张口的自己，自己的能力慢慢退化，品尝这些饭菜，思考是如何做的，哪怕和“妈妈”对话，问做这个菜的时候放了些什么，盐放了多少......
+
+
+本章节会采用分总的形式编写，不会直接像AI一样陈列新版本的变动，静下心来阅读这些内容。
+
+
+
+Milvus 3.0 于 2026 年 7 月 29 日发布首个正式版本（v3.0.0），截至本文撰写(2026.10.19)，3.0 线已经走到 v3.0.3。作为一个 major 版本，它带来的不是"多几个参数、多几个索引类型"，而是把几件在 2.x 里**必须由应用在库外完成的事**，变成了数据库内部的一等能力。
 
 本篇不重复后面五篇的操作细节，只解决三个问题：
 
 - 3.0 在整个版本演进里处于什么位置，和 2.6 是什么关系；
-- 哪些看起来"新"的能力其实 2.5 / 2.6 就已经有，避免把继承当卖点；
-- 要让这些新能力真正生效，你必须做哪些动作，哪些是默认就有的。
+- 哪些看起来"新"的能力其实 2.5 / 2.6 就已经有；
+- 要让这些新能力真正生效，你必须做些什么事情，哪些是默认就有的。
 
 ## 7.0.1 学习目标
 
-- 能说出 Milvus 3.0 三条主线各自解决 2.x 时期的什么痛点
-- 能区分"3.0 新增"与"2.x 已有"，不被版本宣传误导
+- 能说出 Milvus 3.0 三条主线分别解决什么问题：数据在哪里处理、检索逻辑在哪里执行、数据与检索模式怎么扩展
+- 能区分"3.0 新增"与"2.x 已有"
 - 记住官方明确写出的四条兼容性与默认行为边界
 - 能判断自己该马上升级、该观望、还是只读文档不动环境
-- 能按自己的处境选出 7.1 至 7.5 的精读顺序
 
-## 7.0.2 坐标：3.0 落在版本线的哪里
+## 7.0.2：Milvus 3.0 的三条主线
 
-### 7.0.2.1 三条主线的来龙去脉
+3.0 的新特性看着多，本文把它们归成三条主线，分别回答三个问题：**数据在哪里处理、检索逻辑在哪里执行、系统怎样适应新的数据与检索需求**。
 
-Milvus 3.0 的所有新特性，可以归到三条主线上。它们不是凭空加出来的，每一条都是 2.x 时期"不得不绕着走"的做法被逼出来的。
+**第一条：Lake-native，让计算靠近数据。** 这里的"湖原生"指直接面向数据湖里的数据，不必先搬进 Milvus。在 **外部集合（External Collection）** 出现之前，湖上的数据要先进入 Milvus 才能查；3.0 的外部集合让 Milvus 直接读 Parquet / Lance / Iceberg / Vortex，**不搬数据**。官方对这条能力的定义只有一句：
 
-| 主线 | 2.x 时期的做法 | 当年为什么只能这么做 | 最终撞到的墙 | 3.0 的解法 |
-| :--- | :--- | :--- | :--- | :--- |
-| **数据必须在库内** | 外部数据先批量导入（bulk import）成集合内的段文件，才能建索引、才能检索 | 存储引擎只认自己管理的段文件，不认识湖上的开放表格式 | 同一份数据存两遍；湖侧更新后要重灌；数据量大时导入窗口以小时计 | 存储引擎 V3 作为统一底座，外部集合原地查询 Parquet / Lance / Iceberg / Vortex，零拷贝、只读、靠增量刷新追平（见 7.2） |
-| **一条实体一个向量** | 一个向量字段对应一次 ANN 检索，多视角要拆成多个集合 | 早期场景就是单向量近邻检索，Schema 也是按"行"设计的 | 长文档切成多切片、late-interaction 模型每个 token 一个向量、多模态一条数据多个视图，这些"一条数据带一簇向量"放不进去 | StructArray 让一个实体携带嵌套子行与向量列表，向量字段可取 NULL（六种向量类型全部支持），配合 EmbList + DiskANN 走磁盘（见 7.3、7.4） |
-| **检索结果回客户端再算** | 服务端只按相似度返回 top-k，排序、统计、重排都在应用里做 | 检索接口没有 SQL 级的排序与聚合语义 | 为了"按时间再排一次"要多取一批数据回本地；统计口径各写各的；网络往返和内存开销随取数放大 | 服务端 ORDER BY、查询聚合、搜索时分面返回，以及声明式 Function Chain 重排（含原生 XGBoost 打分）（见 7.3） |
+> **External Collection** — query lakehouse data (Parquet, Lance, Iceberg, Vortex) in place: zero-copy, read-only, synced through incremental refresh.
 
-> 💡 **版本说明**：这三条主线的首发节奏是分两步走的——2026 年的 3.0-beta 把外部集合、快照、行级 TTL、可空向量、MinHash DIDO、EmbList + DiskANN、强制合并、存储引擎 V3 等摆上台面；v3.0.0 再补齐 Iceberg 支持、在线加列的**回填与删除**、StructArray 覆盖面、搜索分面、函数链重排、TEXT 长文本、`index_type=FAISS` 直通、Vortex 与 Lance 格式、Woodpecker 独立部署。也就是说，**beta 里"有"不等于 GA 里"好用"**，写代码前先看你要的那一项属于哪一步。
+零拷贝、**只读**、增量刷新，三个限定词都是官方原话。**只读**本身就说明这类集合不用于写入；**增量刷新**说明数据更新靠刷新动作带进来。至于写入走哪条路径、刷新后多久可见，发布说明没有写，**要看外部集合的专门文档**，本篇不在这里下结论。
 
-> ⚠️ **注意**：三条主线里，只有第二条和第三条会改动你的应用代码；第一条主要改的是**运维与数据布局**。如果你只升级版本、不开任何开关，实际用到的新能力非常有限——具体见 7.0.4。
+这条主线上还有两个配套。**Storage V3（Loon）** 是新的存储格式，官方称它是快照与外部库 的"基础"：
 
-### 7.0.2.2 版本时间线：3.0 与 2.6 是并行在跑的
+> **Snapshot** — point-in-time read-only collection views by segment reference, with near-zero marginal storage.
 
-很多读者第一次接触 3.0 时会以为"2.6 是老版本，已经被淘汰了"。实际情况是**两条线在同时发版**，而且 2.6 线的最新补丁比 3.0 线的部分版本还要新。
+合起来的效果是：数据不必先搬进来（外部集合），同时还能拿到一份**时点视图**——官方强调的两个词是 point-in-time 与 near-zero marginal storage，也就是"按某个时间点的状态看数据"和"额外存储几乎为零"。
 
-| 日期 | 版本 | 性质 | 对教程的意义 |
-| :--- | :--- | :--- | :--- |
-| 2024-12-23 | v2.5.0 | 2.x 线 | 全文检索、Text Match、Bitmap 索引、字段可空与默认值在这一版落地 |
-| 2025-08-06 | v2.6.0 | 2.x 线大版本 | 架构大简化（Woodpecker 原生 WAL、MixCoord、Streaming Node GA）、存储格式 V2、RaBitQ、Phrase Match、在线加列（Add Field） |
-| 2026-07-29 | **v3.0.0** | 3.0 线首个正式版 | 湖仓原生、Schema 演进、检索增强三条主线成型 |
-| 2026-09-09 | v3.0.1 | 3.0 线补丁 | REST v2 补齐快照管理与异步恢复、重排函数扩展、TEXT 在 Go/REST 侧打通 |
-| 2026-09-20 | v3.0.2 | 3.0 线补丁 | 本文写作基线；成员过滤统一为 `membership_match` 表达式、外部集合支持自定义 S3 兼容端点、REST v2 增加队列满限流，另有大量外部集合与快照的稳定性修复 |
-| 2026-09-29 | v2.6.25 | 2.6 线补丁 | **注意这一条**：2.6 线仍在维护，没有停更 |
-| 2026-10-14 | v3.0.3 | 3.0 线补丁 | 发布仅数日，引用其行为时需单独标注版本 |
+> ⚠️ **注意**：**Storage V3（Loon）默认关闭**，要用依赖它的能力，得在配置里把 `common.storage.useLoonFFI` 打开。
 
-> ⚠️ **注意**：不要写"2.6 末代版本""2.6 已停止维护"——v2.6.25（2026-09-29）比 v3.0.2（2026-09-20）还晚 9 天。两条线并行，是 3.0 教程必须交代的背景。
+**第二条：检索引擎增强，把更多检索与结果处理放进库内。** 这类需求过去很容易落到应用侧：先多取一批结果，再在本地排序、统计或重排。3.0 把这几件事搬进库内：**服务端 ORDER BY**、**查询聚合**、**搜索时分页返回**、**稀疏索引全面换代**（SINDI、Block-Max WAND、Block-Max MaxScore），以及声明式的 **Function Chain 重排**（含原生 XGBoost 打分~），细节见 7.3 与 7.4。官方对分面的描述顺带把"为什么要搬进库内"说清了：
 
-复核入口：各版本发布说明 https://milvus.io/docs/release_notes.md ；含每个 tag 确切时间的发布页 https://github.com/milvus-io/milvus/releases ；全部 tag https://github.com/milvus-io/milvus/tags 。
+> Specify a facet field at search time and Milvus returns the top facet values, each represented by its best-matching member in ANN ranking and annotated with aggregates such as COUNT and AVG — the faceted-search sidebar (brand, price range, attributes) in one request, instead of over-fetching and counting client-side.
 
-### 7.0.2.3 该追哪个小版本
+> 可以在搜索请求中指定一个分面字段，Milvus 会返回该字段的热门取值；每个取值由 ANN 排名中最匹配的实体代表，并附带 COUNT、AVG 等统计值。这样应用可以在一次请求中生成类似按品牌、价格区间或属性筛选的分面栏，而不必先多取一批结果，再由客户端计算统计值。
 
-本教程基线选 **v3.0.2**，理由有三条。
+**第三条：数据与检索模式扩展，适应持续演进的数据与多向量场景。** 这条主线是三件事：**在线改 schema**（加字段 / 删字段 / 回填）、**TEXT 长文本字段**、**多向量（StructArray）**。官方对这一件的原话是：
 
-1. **它足够稳**。3.0.0 作为首个正式版，不少能力当时仍带着"默认关闭"或"覆盖面不全"的标签——外部集合的 Iceberg 支持、在线加列的回填与删除，都是到 3.0.0 才补齐的；3.0.1 又把快照的 REST v2 接口补上。跳过这两个版本去引用它们的行为，容易踩到后来被修复的坑。
-2. **它不是刚出的补丁**。v3.0.3 发布于 2026-10-14，距本文撰写只有几天，实践样本少，以它作基线时读者复现的漂移风险更高。
-3. **与前六章衔接得清楚**。前面章节讲的是 2.x 的行为，3.0.2 已经把"哪些必须手动开、哪些将来会默认开"说明白了，适合作为过渡期的稳定参照点。
+> 3.0.0 closes the loop: columns can be added, filled, and dropped while serving continues.
 
-读者自己部署时的建议顺序：**追 GA 之后的补丁版，不追最新补丁**。要求稳定就用 3.0.2；确实依赖 3.0.3 修掉的某个具体问题，再单独升上去，并在运维笔记里写清"为什么升"。
+> 在 Milvus 提供服务期间，可以在线添加字段、为字段回填数据，并删除字段。
 
-> 💡 **版本说明**：SDK 侧另有一套版本号——pymilvus 3.x 要求 Python 3.9 及以上；Milvus Lite 是**独立的版本号轨道**，号段与 3.0.x 不同，不要写成"Milvus Lite 3.0"。三者对应矩阵见 7.1.3.1，本篇不重复。
+这句要说得准确：它支持的是**在服务持续期间做字段级的增删与回填**，不能理解成"任何 schema 变更都不用停服、不用重建 collection"。具体到操作，有两条限制值得记住。
 
-## 7.0.3 别把继承当新增：2.5 / 2.6 已经铺好的地基
+**一是新增字段必须可空，回填也不是自动的。**
 
-这一节存在的唯一理由，是防止读者把"3.0 才有的能力"理解成一件全新的事——也防止他们因为"这些 2.x 我就见过"而错过真正变了的默认做法。下面两张表只登记归属，用法一律回原章节看。
+官方原文：Added user-defined fields must be nullable. Set `nullable=True` when calling `add_collection_field()`. For existing entities, the added field is `NULL` unless you add a scalar field with a `default_value`. 
 
-### 7.0.3.1 2.5 线给过什么
+也就是说，给已经有数据的 collection 加字段，老数据不会自动"长"出新值。把它想成给一张已经有 100 万行的表加一列：
 
-v2.5.0 发布于 2024-12-23，是 2.x 里"检索语义"开始丰富的一版。
+- **这一列对老数据是空的（`NULL`）。** 注意 `NULL` 不是 0，也不是空字符串，而是"这里没有值"。数据库不会猜你想填什么，所以它就空着。
+- **唯一会自动有值的情况**：新加的是标量字段（int、float、varchar 这类），而且你在添加时给了默认值。这样 100 万条老数据会统一读到这个默认值。
+- **如果要给每条老数据填不同的值，就只能自己补。** 官方给的两条路是 upsert（按主键把新值写回对应实体）或者回填流程。加完字段就放着不管，老数据会一直是 `NULL`。
+- **如果新加的是向量字段**，老数据在补上向量之前，按这个字段检索时会被直接跳过——不是排在末尾，而是根本不出现在结果里。
 
-| 能力 | 首发版本 | 本项目已有的对应章节 |
-| :--- | :--- | :--- |
-| 全文检索（Full Text Search，BM25） | v2.5.0 | Ch4《Milvus 的 AI 应用开发：基于 BM25 的混合搜索向量数据库开发实战》 |
-| Text Match 表达式 | v2.5.0 | Ch4 同章，Ch3 3.6 标量查询 |
-| Bitmap 索引 | v2.5.0 | Ch2 2.3 索引体系 |
-| 字段可空与默认值（Nullable & Default） | v2.5.0 | Ch2 2.2 数据模型 |
-| 稀疏向量与混合检索 | v2.4/v2.5 | Ch4 |
-| Faiss 系量化索引（HNSW SQ / PQ / PRQ） | v2.5.0 | Ch2 2.3.3 常见索引类型 |
-| GroupBy 增强、迭代器（Iterator）、表达式模板 | v2.5.0 | Ch3 3.5 搜索、Ch3 3.6 查询 |
-| Streaming Node（Beta） | v2.5.0 | Ch6《Milvus 底层架构详解》 |
-| CSV 批量导入 | v2.5.0 | Ch4 4.4 导入数据 |
-| 集合级 TTL（数据过期） | 2.x 早于 3.0 | Ch3 3.10 数据过期管理（TTL） |
+一句话：**加字段只是开了一个空槽；填不填、填什么，取决于有没有给默认值、有没有补写数据。**
 
-### 7.0.3.2 2.6 线给过什么
+**二是"改集合字段"与"改 StructArray 内部结构"不是一回事。** 集合级字段可以整体增删，但子字段不行。官方原文：You can drop a whole `ARRAY<STRUCT>` field, but you cannot drop an individual sub-field inside an `ARRAY<STRUCT>` field. 加子字段同样不行：After a StructArray field is created, you cannot add new subfields to that existing StructArray field. 需要调整子字段结构时，官方给的做法是先 `drop_collection_field()` 删掉整个 StructArray，再按新的 Struct schema 重新添加。
 
-v2.6.0 发布于 2025-08-06，是**架构**动刀的一版，很多被误记在 3.0 名下的事其实是它做的。
+所以准确的说法是：**3.0.0 让集合级字段的变更可以在服务运行中完成；它并没有改变"StructArray 的内部结构只能整体重建"这条约束。**
 
-| 能力 | 首发版本 | 说明 |
-| :--- | :--- | :--- |
-| Woodpecker 原生 WAL，去掉 Kafka / Pulsar 依赖 | v2.6.0 | 这是写入引擎替换，3.0 只是把它变成可独立部署的服务 |
-| Streaming Node GA | v2.6.0 | 分片级 WAL 读写与 query delegator 归位 |
-| 协调组件合并为 MixCoord、IndexNode 与 DataNode 合并 | v2.6.0 | 组件数量下降，运维复杂度降低 |
-| 存储格式 V2 | v2.6.0 | 注意是 **V2**；3.0 的 Storage V3（Loon）是另一套东西 |
-| RaBitQ 1-bit 量化 | v2.6.0 | 高召回的 1-bit 量化路线 |
-| Phrase Match | v2.6.0 | 顺序敏感 + slop 参数 |
-| MinHash LSH 索引（Beta） | v2.6.0 | 去重检索；3.0 补的是"签名由库内函数生成" |
-| Embedding Functions（Data-in, Data-out） | v2.6.0 | 写原文进库、库内调模型出向量 |
-| 在线 Schema 演进：Add Field | v2.6.0 | 只到"加列"；**回填与删列是 3.0 才补上的** |
-| INT8 向量、Lindera / ICU 分词、按行选分词器 | v2.6.0 | 多语言文本处理的底子 |
-| JSON 运算符（JSON_CONTAINS / JSON_EXISTS / CAST）、JSON Shredding、JSON Flat 索引（Beta） | v2.6.x | Ch2 JSON 字段、Ch3 JSON 查询的既有内容；**3.0 未把它们列为新增项** |
-| 懒加载缓存层 | v2.6.0 | 处理大于内存的数据集，与 3.0 的层级存储思路相近但不是一回事 |
+这条主线的另外两件是 **TEXT 长文本字段**和**多向量**。TEXT 与 VarChar 的分界、匹配算子怎么配，放到 7.3.4 展开，这里不重复。需要在这里先讲清的是多向量——原因很实际：它是 3.0 里最容易被当成"全新能力"的部分，而它其实在 2.6 版本就已经存在；不先把它"是什么、有几种检索方式"说明白，后面 7.3 的示例就只能照着代码抄，抄完也不知道自己用的是哪一种粒度。
 
-### 7.0.3.3 纠偏清单
+**先说多向量这件事。** 一个实体带多个向量，并不等于"3.0 才有能力存多个向量"——**结构数组（StructArray）与相关检索在 2.6 线已经出现**。v2.6.18 写着：
 
-| 常被当成 3.0 新增 | 实际首次出现 | 3.0 真正改变的那一点 |
-| :--- | :--- | :--- |
-| 换掉 Kafka / Pulsar 的 WAL | v2.6.0 | Woodpecker 可**作为独立服务部署**，独立扩缩、故障隔离、可观测 |
-| 在线加字段 | v2.6.0（Add Field） | 补齐**在线回填与删列**；内核派生值（BM25、MinHash 函数输出列）可自动回填 |
-| MinHash 近重复检测 | v2.6.0（MINHASH_LSH，Beta） | 增加 MinHash 函数：写文档进库即得签名（DIDO），并与外部集合、StructArray 组合 |
-| 短语匹配 | v2.6.0 | 与 TEXT 长文本字段结合：超过约 64 KB 的内容转 Vortex LOB 存储后仍能 `text_match` / `phrase_match` / BM25 |
-| 字段可为 NULL | v2.5.0（Nullable & Default） | 扩展到**向量字段**，六种向量类型全部支持；检索自动跳过 NULL 向量，NULL 几乎不占存储 |
-| BM25 全文检索 | v2.5.0 | TEXT 成为长文本一等公民（取消长度上限），并加入自定义词典、同义词词典与更多语言的 analyzer |
-| Faiss 量化索引 | v2.5.0（HNSW SQ/PQ/PRQ） | 那是**索引类型**；3.0 的 `index_type=FAISS` 是接受任意 index-factory 串的**直通模式**，两者不可混为一谈 |
-| 集合级 TTL | 2.x 早已有 | 3.0 增加 **Entity TTL**（由 TIMESTAMPTZ 驱动的行级过期），与集合级 TTL 不是同一件事 |
-| 数组结构体 StructArray | v2.6.x 文档已收录（v2.6.18 起可做结构体内元素的向量检索） | 3.0 补齐覆盖面：建字段 / 建索引专页、NULL 值、位图索引、upsert 部分更新、REST 与批量导入 |
-| 向量字段可为 NULL | v2.6.18 | 3.0 覆盖全部六种向量类型，并明确 NULL 几乎不占存储、检索自动跳过 |
+> You can now run vector search on Struct Array fields at the granularity of individual elements instead of the whole row, with each result reporting the matched element's offset within the array.
 
-> ⚠️ **注意**：这张表只回答"新不新"，不回答"能不能用"。上表右列提到的 3.0 改动里，有几项在 3.0.0 时是**默认关闭或需手动开关**的，别因为"3.0 支持"就直接在代码里使用——先看 7.0.4。
+v2.6.16 还有一条：Bumped Go SDK to v2.6.4 with full struct-array support (vector sub-fields, EmbeddingList search, schema validation)。所以 3.0 做的是**在这套结构上继续加能力**，官方那句动机是对旧假设的批评，而不是对 2.x 能力的描述：
 
-> 💡 **版本说明**：上表的 2.x 归属有两条证据链——官方 v2.5.x / v2.6.x 的 release notes 原文，以及官方文档菜单在 v2.6.x 与 v3.0.x 的页面差集。要注意不少能力是在 2.6 的**补丁版本**里加的（例如向量字段可空、结构体内元素级检索见 v2.6.18 的说明），所以"2.6 有没有"必须按读者实际使用的小版本核对，不能只看 2.6.0。
+> The "one entity = one vector" assumption no longer fits modern retrieval. Long documents get split into many chunks, late-interaction models such as ColBERT emit one vector per token, and multimodal entities can carry several views.
+
+> 一个实体对应一个向量的假设已经不再适用现代检索需求，长文档可能拆成多个片段；ColBERT这类late-interaction模型会为每个token生成一个向量；多模态实体也可能包含多个视角或表示。
+
+要真正理解这条主线，得先分清**两种检索粒度**——它们共用一份嵌套数据，但查询形态和返回结果完全不同。
+
+> 这里的嵌套数据的含义是：数据并不是所有的字段都平铺在实体上，而是实体里面还有一组结构化子项。例如文章实体里面有多个chunks，每个chunks有文本、页码、向量等字段。
+
+> 下面提到的StructArry就是用来存储这组子项的字段类型
+
+**其一，按实体出结果（EmbeddingList 搜索）。** 把 StructArray 某个向量子字段里的向量整体看作"这条实体的向量列表"，查询本身也是一个向量列表，Milvus 用 `MAX_SIM*` 指标族比较两个列表，返回**命中的实体**。官方定义：
+
+> EmbeddingList search treats the vectors inside a StructArray vector subfield as one embedding list for the parent entity. The query is also an embedding list. Milvus compares the query embedding list with the stored embedding list by using a `MAX_SIM*` metric and returns matching entities.
+
+> EmbeddingList搜索会把StructArray向量子字段中的多个向量视为所属父实体的一份向量列表。查询本身也以向量列表的形式提供。Milvus使用MAX_SIM*指标比较查询向量列表与已存储的向量列表，并返回匹配的实体。
+> > 这里举个例子，比如一篇文章被拆分成为多个片段，每个片段都有一个向量表示；这些向量合起来就是这篇文章的向量列表。文档示例中，StructArray可以把多个chunk及其向量存放在同一个父实体下。
+
+> >  查询的时候，用的是一组向量，ColBERT会把查询拆成token并为其生成向量列表，再与文档的向量列表比较。
+
+> > MAX_SIM* 是embeddingList搜索的时候使用的一类指标，它负责比较查询向量和实体向量列表，搜索结果依然按照父实体返回，*号表示一类指标，比如MAX_SIM_COSINE、MAX_SIM_IP 和 MAX_SIM_L2。
+
+
+`MAX_SIM*` 里的星号，是官方用来表示"这一类指标"的写法，具体包含哪些指标、分数怎么算，本篇不展开公式。这里只记两条结论：**查询是向量列表；返回的是父实体，不是其中某个元素。** 它对应的典型用法是 late interaction——ColBERT 给每个 token、ColPali 给每个 patch 各生成一个向量，匹配的细粒度发生在列表内部，但结果仍然落到文档或页面这一级。
+
+**其二，按元素出结果（element-level 搜索）。** StructArray 里的每个 Struct 元素各自作为独立候选，命中就返回那个元素，未分组时还能给出它在数组中的下标。官方定义：
+
+> Element-level search treats each Struct element as an independent vector-search candidate. Each hit represents a matched element inside the StructArray field, and ungrouped results can expose the element offset.
+
+此时查询是**普通向量**，指标也是普通向量指标（`COSINE` / `IP` / `L2`），返回的是"最相关的那一段、那一页、那个 patch"。
+
+所以两种方式不是新旧替代，而是**结果粒度不同**。选哪个，取决于你要的结果长什么样：**目标是实体级结果，就用 EmbeddingList 搜索；要返回匹配的 Struct 元素（带 offset），就用 element-level 搜索。**
+
+> ⚠️ **注意**：一条向量字段或向量子字段**只能建一个索引**，而两种搜索用的指标族不同。官方因此明确要求：同一集合既要实体级又要元素级，就**拆成两个向量子字段**。原文：If your collection needs both EmbeddingList search and element-level search, use two separate vector subfields. A vector field or vector subfield accepts only one index, and the two search modes require different metric families.
+
 
 ## 7.0.4 变化全景：按"要不要动手"分层
 
-上一节解决"新不新"，这一节解决"要不要动手"。3.0 的能力并不是一升级就全部生效的：官方在 v3.0.0 的 *Compatibility and behavior notes* 里只明确写出了四条默认行为，其余都要你改配置或改代码。
+上一节讲完三条主线，这一节回答"要不要动手"。3.0 的能力**并不是一升级就全部生效**：官方在 v3.0.0 的 *Compatibility and behavior notes* 里只明确写出了四条默认行为，其余都要你改配置或改代码。
 
 ### 7.0.4.1 不用改代码就可能感知到的变化
 
-这一层严格只收官方明确写出的四条，不掺推测。
+官方在这一小节里写明的默认行为只有四条，逐条看原文与含义。
 
-| 官方事实 | 你会实际看到什么 | 依据 |
-| :--- | :--- | :--- |
-| **Storage V3（Loon）默认关闭** | 装好 3.0 之后，快照、TEXT 长文本字段这些依赖它的功能**并不存在**；必须手动打开 `common.storage.useLoonFFI` 才出现。官方说明它会在今后的版本转为默认开启 | https://milvus.io/docs/release_notes.md ｜ https://milvus.io/docs/storage-v3.md |
-| **2.6 → 3.0 兼容，且可以回滚** | 升上去之后仍能退回 2.6；但**一旦启用或使用改变序列化数据的特性（例如 Storage V3），回滚窗口就永久关闭**。升级前必须把这一点写进变更方案 | https://milvus.io/docs/release_notes.md |
-| **新引入的索引算法默认不生效** | 光升版本不会得到新稀疏/标量索引。需要把 `dataCoord.targetVecIndexVersion` 抬到 **10**、`dataCoord.targetScalarIndexVersion` 抬到 **4**；官方说明今后会默认开启 | https://milvus.io/docs/release_notes.md ｜ https://milvus.io/docs/dynamic_config.md |
-| **GPU 镜像转向 CUDA 12.9** | 沿用旧 GPU 环境的读者会直接遇到不兼容：镜像不再保留 Ubuntu 20.04 的 GPU 兼容性 | https://milvus.io/docs/release_notes.md |
+**一、存储引擎 V3 默认关闭。** 官方原文：
 
-> ⚠️ **注意**：除这四条之外，官方**没有**写过"某项新能力已默认开启"。因此任何"升级到 3.0 就自动更快 / 自动用上 Woodpecker / 自动启用 StructArray"的说法，都必须先在 release notes 或对应文档页找到原文，找不到就不要写。尤其注意：Woodpecker 作为默认 WAL 是 **2.6** 就完成的事，3.0 新增的是"可以独立部署"。
+> **Storage V3 (Loon) is disabled by default.** Features that depend on it — such as Snapshot and TEXT fields — require enabling it manually via `common.storage.useLoonFFI`. Storage V3 will be enabled by default in a later release.
+
+含义是：装好 3.0 之后，**快照和 TEXT 长文本字段这些功能实际上并不存在**，必须手动打开 `common.storage.useLoonFFI` 才会出现。
+
+**二、2.6 → 3.0 保证兼容，也能回滚——但有个一次性的开关。** 官方原文：
+
+> **2.6 → 3.0 compatibility and rollback are guaranteed** — a 3.0 deployment can be rolled back to 2.6. However, once you enable or use features that change the serialized data format (for example Storage V3), rollback is no longer possible.
+
+也就是说升级本身留了后路，可**一旦启用了改变序列化数据格式的特性（例如 Storage V3），回滚窗口就永久关闭**。这一条必须写进你的升级变更方案，而不是事后才发现。
+
+**三、新引入的索引算法默认不生效。** 官方原文：
+
+> **New index versions are opt-in for now.** Newly introduced index algorithms require manually raising the target index version (`dataCoord.targetVecIndexVersion` to 10, `dataCoord.targetScalarIndexVersion` to 4) before they take effect; a later release will enable them by default.
+
+含义是：光升版本拿不到新稀疏 / 新标量索引，必须把 `dataCoord.targetVecIndexVersion` 抬到 **10**、`dataCoord.targetScalarIndexVersion` 抬到 **4**。
+
+**四、GPU 镜像换到 CUDA 12.9。** 官方原文只有一句：**GPU images move to CUDA 12.9** and no longer preserve Ubuntu 20.04 GPU compatibility。沿用旧 GPU 环境的读者会直接撞上不兼容。
+
+> ⚠️ **注意**：除这四条之外，官方**没有**写过"某项新能力已默认开启"。因此任何"升级到 3.0 就自动更快 / 自动用上 Woodpecker / 自动启用 StructArray"的说法，都必须先在 release notes 或对应文档页找到原文，找不到就不要写。尤其注意：Woodpecker 作为默认 WAL 是 **2.6** 就完成的事，3.0 新增的是"可以作为独立服务部署"。
 
 ### 7.0.4.2 必须动手才有用的部分
 
-| 要动的东西 | 解锁了什么 | 本篇讲在哪节 | 官方文档 |
-| :--- | :--- | :--- | :--- |
-| `common.storage.useLoonFFI` | 存储引擎 V3、快照、TEXT 长文本字段 | 7.2.2 | https://milvus.io/docs/storage-v3.md |
-| `dataCoord.targetVecIndexVersion = 10` | 换代后的稀疏向量索引（SINDI、Block-Max WAND / MaxScore 等） | 7.4.2 | https://milvus.io/docs/sparse-inverted-index.md |
-| `dataCoord.targetScalarIndexVersion = 4` | 新标量索引路线（含位图类索引的增强） | 7.4.5 | https://milvus.io/docs/bitmap.md ｜ https://milvus.io/docs/index_selection.md |
-| MQ 切换与 Woodpecker 部署形态 | 把 WAL 作为独立服务运行，独立扩缩与故障隔离 | 7.4.6 | https://milvus.io/docs/woodpecker.md ｜ https://milvus.io/docs/switch-mq-type.md |
-| 升级 pymilvus 到 3.0.x | TEXT 字段类型、函数链、搜索分面、compaction 生命周期观测等 SDK 能力 | 7.1.3.1 | https://milvus.io/docs/install-pymilvus.md ｜ https://milvus.io/docs/using_milvusclient.md |
-| 对象存储与湖表访问权限 | 外部集合原地查询、快照的跨桶备份恢复 | 7.2.3 ｜ 7.2.4 | https://milvus.io/docs/create-an-external-collection.md ｜ https://milvus.io/docs/multi-storage-backup-and-restore.md |
-| 集群侧文件资源（词典） | 自定义词典、同义词词典，改善中文检索 | 7.3.7 | https://milvus.io/docs/manage-file-resources.md ｜ https://milvus.io/docs/analyzer-overview.md |
+把上面四条反过来看，就是七件要做的事，每件后面注明它解锁什么、在哪一节讲。
+
+- **打开 `common.storage.useLoonFFI`**：解锁存储引擎 V3、快照、TEXT 长文本字段。见 **7.2.2**，官方页 https://milvus.io/docs/storage-v3.md 。
+- **把 `dataCoord.targetVecIndexVersion` 抬到 10**：解锁换代后的稀疏向量索引（SINDI、Block-Max WAND / MaxScore）。见 **7.4.2**，官方页 https://milvus.io/docs/sparse-inverted-index.md 。
+- **把 `dataCoord.targetScalarIndexVersion` 抬到 4**：解锁新标量索引路线（含位图类索引增强）。见 **7.4.5**，官方页 https://milvus.io/docs/bitmap.md 与 https://milvus.io/docs/index_selection.md 。
+- **配置 MQ 切换与 Woodpecker 的部署形态**：把 WAL 作为独立服务运行，换取独立扩缩与故障隔离。见 **7.4.6**，官方页 https://milvus.io/docs/woodpecker.md 与 https://milvus.io/docs/switch-mq-type.md 。
+- **把 pymilvus 升到 3.0.x**：拿到 TEXT 字段类型、函数链、搜索分面、compaction 生命周期观测这些客户端能力。见 **7.1.3.1**，官方页 https://milvus.io/docs/install-pymilvus.md 与 https://milvus.io/docs/using_milvusclient.md 。
+- **准备对象存储与湖表的访问权限**：外部集合原地查询、快照的跨桶备份恢复都依赖它。见 **7.2.3** 与 **7.2.4**，官方页 https://milvus.io/docs/create-an-external-collection.md 与 https://milvus.io/docs/multi-storage-backup-and-restore.md 。
+- **在集群侧登记文件资源（词典）**：自定义词典、同义词词典，用来改善中文检索。见 **7.3.7**，官方页 https://milvus.io/docs/manage-file-resources.md 与 https://milvus.io/docs/analyzer-overview.md 。
 
 具体怎么改配置文件、怎么滚动重启、改完如何验证生效，全部在 **7.1.4**，本篇只回答"哪些开关值得动"。
 
-### 7.0.4.3 新增能力归属表
+### 7.0.4.3 新增能力归属清单
 
-下表把 3.0 线的全部新增项列全，左列按阶段分组（依据是官方 *3.0-beta 的 Key Features* 与 *v3.0.0 的 What's new since 3.0-beta* 两份清单），右列指向讲解它的小节。
+下面按阶段把 3.0 线的新增项列全，依据是官方 **3.0-beta 的 Key Features** 与 **v3.0.0 的 What's new since 3.0-beta** 两份清单，每项后面注明它影响的是运维、数据布局、代码还是索引参数，以及讲它的小节。
 
-| 能力 | 阶段 | 影响面 | 细节见 |
-| :--- | :--- | :--- | :--- |
-| 存储引擎 V3（Loon） | beta | 运维（默认关） | 7.2.2 |
-| 外部集合（原地查询） | beta | 数据布局 | 7.2.3 |
-| 外部集合：Iceberg 支持、可改 Schema、湖仓工作流补全 | GA | 数据布局 | 7.2.3 |
-| Vortex / Lance 格式支持 | GA | 数据布局 | 7.2.3 |
-| 快照 Snapshot | beta | 运维 | 7.2.4 |
-| 在线 Schema 演进全流程：加列 / 回填 / 删列（加列本身 v2.6.0 已有） | GA | 代码 | 7.2.5 |
-| StructArray 覆盖面补齐：NULL 值、位图索引、活集合动态加子字段、upsert 部分更新、REST 与批量导入 | GA | 代码 + 索引 | 7.3.2 |
-| 向量字段可为 NULL，覆盖全部六种向量类型（向量字段可空最早见于 v2.6.18 说明） | beta / GA | 代码 | 7.3.3 |
-| Entity TTL（行级过期，TIMESTAMPTZ 驱动） | beta | 代码 | 7.3.3 |
-| TEXT 长文本字段（取消长度上限，`text_match` / `phrase_match` / BM25） | GA | 代码 | 7.3.4 |
-| MinHash DIDO（写文档即得签名） | beta | 代码 | 7.3.4 |
-| 自定义词典与同义词词典 | beta | 运维 + 代码 | 7.3.7 |
-| Query / Search 服务端 ORDER BY | beta | 代码 | 7.3.5 |
-| 查询聚合 | beta | 代码 | 7.3.5 |
-| 搜索侧**分面**返回 | GA | 代码 | 7.3.5 |
-| Function Chain 重排（含原生 XGBoost 打分） | GA | 代码 | 7.3.6 |
-| 稀疏索引全面换代（SINDI、Block-Max WAND / MaxScore） | GA | 索引参数 | 7.4.2 |
-| `index_type=FAISS` 直通任意 index-factory 串 | GA | 索引参数 | 7.4.3 |
-| EmbList + DiskANN（磁盘上的多向量检索） | beta | 索引参数 | 7.4.4 |
-| Woodpecker 独立部署 | GA | 运维 | 7.4.6 |
-| 强制合并 Force Merge（同步 / 异步）、compaction 生命周期可观测 | beta / GA | 运维 | 7.4.7 |
+**3.0-beta 提出、GA 沿用或扩大的：**
 
-> ⛳ **架构演进提示**：EmbList + DiskANN 是官方所称 StructList 家族的**第一个落地变体**；家族其余部分（StructList 过滤、Muvera / Lemur 多向量加速）官方定位为后续目标，撰写时不要写成"已经可用"，需要按你实际使用的版本核对。
+- 存储引擎 V3（Loon）——运维，默认关，见 7.2.2。
+- 外部集合原地查询——数据布局，见 7.2.3。
+- 快照 Snapshot——运维，见 7.2.4。
+- Entity TTL（由 TIMESTAMPTZ 驱动的行级过期）——代码，见 7.3.3。
+- MinHash DIDO（写文档进库即得签名）——代码，见 7.3.4。
+- 自定义词典与同义词词典（集群级 FileResource）——运维 + 代码，见 7.3.7。
+- Query / Search 服务端 ORDER BY——代码，见 7.3.5。
+- 查询聚合（COUNT / SUM / AVG / MIN / MAX 与 group-by）——代码，见 7.3.5。
+- EmbList + DiskANN（把多向量检索放到磁盘上）——索引参数，见 7.4.4。
+- 强制合并 Force Merge（同步 / 异步）——运维，见 7.4.7。
+- 向量字段可为 NULL——代码，见 7.3.3。官方在 beta 清单里的表述是 **Nullable vectors — NULL on all six vector types; search skips NULL rows**；3.0 的说明页补了三句关键限定：检索自动跳过 NULL 向量、检索质量不受影响、NULL 向量几乎不占存储，并且 `AddField` 在 `nullable=True` 时能给已有集合在线加向量字段。**这是 3.0 的能力，不要写成 2.6 已有。**
 
-## 7.0.5 你该从哪里切入：三种处境
+**v3.0.0 才补齐的：**
 
-前面三节把"变了什么"讲完，这一节只回答"你该看哪几节"。每种处境都给出**别做什么**，因为 3.0 的坑主要来自"以为默认就有"。
+- 外部集合的 Iceberg 支持、可改 Schema 与完整湖仓工作流——数据布局，见 7.2.3。
+- Vortex 与 Lance 两种开放列式格式支持——数据布局，见 7.2.3。
+- 在线 Schema 演进全流程（加列 / 回填 / 删列）——代码，见 7.2.5。加列本身 v2.6.0 已有（Add Field），3.0 补的是回填与删列。
+- StructArray 覆盖面补齐——代码 + 索引，见 7.3.2。官方原文：**StructArray now supports null values, bitmap indexes, dynamic field addition on live collections, and partial update of struct fields through upsert, with REST and bulk-import coverage to match.**
+- 搜索侧分面返回——代码，见 7.3.5。
+- Function Chain 重排（含原生 XGBoost 打分）——代码，见 7.3.6。
+- 稀疏索引全面换代——索引参数，见 7.4.2。官方原文：**It introduces new search algorithms — SINDI, Block-Max WAND, and Block-Max MaxScore — along with inverted-list compression, configurable quantization, and per-workload search-algorithm selection.**
+- `index_type=FAISS` 直通任意 index-factory 串——索引参数，见 7.4.3。官方原文：**A new `FAISS` index type accepts arbitrary Faiss index-factory strings through the `faiss_index_name` parameter — `IVF64,Flat`, `HNSW16,Flat`, `OPQ16,IVF64,PQ16x4` — with search parameters passed through.**
+- Woodpecker 可作为独立服务部署——运维，见 7.4.6。
+- compaction 生命周期可观测——运维，见 7.4.7。
 
-### 7.0.5.1 还在 2.x 生产环境，只想了解趋势
-
-读本篇 + 7.1.2 + 7.1.3 即可，不需要动任何环境。
-
-- 别做：**不要为了"先试试新特性"在生产集群上打开 `common.storage.useLoonFFI`**。按官方说明，一旦使用改变序列化数据的特性，回滚窗口就永久关闭，这在生产上是不可逆操作。
-- 值得先做的：把 7.0.4.1 的四条事实对照自己的部署形态（单机 / 集群 / GPU）过一遍，确认将来升级时要动哪几处。
-
-### 7.0.5.2 准备升级到 3.0
-
-按 **7.1.4** 的顺序做，顺序不能随意调换：先确认版本与 SDK 矩阵（7.1.3.1），再升服务端，再升 pymilvus，最后才动开关。
-
-| 动作 | 为什么不能跳 | 见哪节 |
-| :--- | :--- | :--- |
-| 先定回滚策略并写进变更单 | 启用改序列化格式的特性后就回不去了 | 7.0.4.1 |
-| 核对三种部署形态下各特性的支持边界 | 不是所有新特性在每种形态都可用 | 7.1.5.1 |
-| 打开 Storage V3 后逐项验证，再开下一项 | 快照与 TEXT 都依赖它，同时改会分不清是谁的问题 | 7.1.4.3 |
-| 抬索引版本前先记下现有索引名与参数 | 回退时需要知道原来的配置 | 7.1.4.4 |
-| WAL 形态调整前确认一致性语义与运维观测手段 | 写入链路变更影响面最大 | 7.4.6.1 |
-
-### 7.0.5.3 新项目起步，或正在做 RAG
-
-推荐顺序：**7.1 → 7.3.2 → 7.3.4 → 7.3.5 → 7.5**。
-
-原因是：新项目真正会立刻用到的是"数据模型 + 检索语义"这一层——StructArray 决定你怎么切文档、TEXT 决定长文本怎么存、服务端排序与聚合决定你的应用代码能少写多少；最后用 7.5 把它们串成一条完整链路。
-
-- 别做：**不要从 7.2（外部集合与快照）开始**。那一层需要先有湖上数据和对象存储权限，多数起步项目并不具备，照抄会在环境准备上卡很久。
-- 可以延后：索引换代与写入引擎（7.4）在数据量小的时候收益不明显，等有了实测压力再回去看。
-
-## 7.0.6 本章小结
-
-本章核心掌握：
-
-- Milvus 3.0 的三条主线——**数据必须在库内 → 湖仓原地查询**、**一实体一向量 → StructArray 与可空向量**、**结果回客户端再算 → 服务端排序 / 聚合 / 分面 / 重排**——都是为了解决 2.x 时期"应用不得不承担的那部分工作"。
-- 3.0 与 2.6 **并行在维护**。判断某项能力"新不新"要回到发布记录：WAL 换成 Woodpecker、在线加列、MinHash LSH、短语匹配、字段可空这些都在 2.5 / 2.6 已经出现，3.0 改的是它们的**完成度与默认做法**。
-- 升级动作有先后，且**四条默认行为必须记住**：Storage V3 默认关闭；使用改序列化格式的特性后不可回滚；新索引算法需手动抬 `targetVecIndexVersion` / `targetScalarIndexVersion`；GPU 镜像转 CUDA 12.9。
-- 教程基线是 **v3.0.2**（2026-09-20）。v3.0.3（2026-10-14）过新，引用其行为时需单独标注。
-
-| 你的问题 | 去这一节 |
-| :--- | :--- |
-| 我要升到哪个版本、开关具体怎么配 | 7.1.4 |
-| 这个特性在我的部署形态下能不能用 | 7.1.5.1 |
-| 湖上的数据怎么直接查、怎么追增量 | 7.2.3 |
-| 发布前怎么保护、误删怎么恢复 | 7.2.4 |
-| 一篇文档多个切片向量怎么建模 | 7.3.2 |
-| 排序、统计、分面能不能一次请求拿到 | 7.3.5 |
-| 重排能不能搬进库里声明 | 7.3.6 |
-| 稀疏索引新算法要怎么才生效 | 7.4.2 |
-| 碎段太多导致延迟抖动怎么办 | 7.4.7 |
-| 把以上能力串成一条能跑的链路 | 7.5 |
+> ⛳ **架构演进提示**：EmbList + DiskANN 是官方所称 StructList 家族的**第一个落地变体**，家族其余部分（StructList 过滤、Muvera / Lemur 多向量加速）官方定位为后续目标，撰写时不要写成"已经可用"，需按读者实际使用的版本核对。

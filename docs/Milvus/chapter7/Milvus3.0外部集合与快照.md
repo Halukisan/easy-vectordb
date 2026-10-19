@@ -28,7 +28,7 @@ EDITOR:END -->
 ### 7.2.2.1 为什么先讲底座
 
 <!-- EDITOR:BEGIN 7.2.2.1
-【本节要写什么】5–8 行 + 一张"2.x 存储与元数据组织 vs Storage V3"两列简表。
+【本节要写什么】5–8 行：先用一段写 2.x 的存储与元数据组织，再用一段写 Storage V3 换了什么，两段形成对照。
 【先读这些】https://milvus.io/docs/storage-v3.md ｜ https://milvus.io/docs/object-storage.md ｜ https://milvus.io/docs/release_notes.md （beta "Storage V3（Loon）"一节）
 【必须注意】
 ・manifest 是唯一真相 + 原子更新；列式对象存储；Vortex 是可选列式格式（默认仍是 parquet，官方建议先做基准测试再切；自适应编码：字典/RLE/bit-packing/浮点压缩、零拷贝解压）；LOB 改为分区级 Vortex 文件跨段共享，compaction 只搬 (file_id, offset) 引用不搬正文。
@@ -56,7 +56,7 @@ EDITOR:END -->
 ### 7.2.3.1 三个关键属性与适用场景
 
 <!-- EDITOR:BEGIN 7.2.3.1
-【本节要写什么】三条属性各一句话 + 一张"该用外部集合 / 该用普通集合"的判据表。
+【本节要写什么】三条属性各一句话，再写两三个判断段落收口：什么情况该用外部集合、什么情况仍该用普通集合。
 【先读这些】https://milvus.io/docs/create-an-external-collection.md ｜ https://milvus.io/docs/data-infra-integration-overview.md
 【必须注意】
 ・原地读（zero-copy，不搬数据）/ 只读（release notes 明确 read-only；官方操作页未提供写入接口）/ 靠增量 refresh 追平。
@@ -69,7 +69,7 @@ EDITOR:END -->
 ### 7.2.3.2 支持的存储格式与前置准备
 
 <!-- EDITOR:BEGIN 7.2.3.2
-【本节要写什么】一张表（格式 / 典型来源 / 需要的凭据与路径形态），加一条 > 📌 **前置条件**。
+【本节要写什么】分点写清，不要做成表格（格式 / 典型来源 / 需要的凭据与路径形态），加一条 > 📌 **前置条件**。
 【先读这些】https://milvus.io/docs/data-infra-integration-overview.md ｜ https://milvus.io/docs/object-storage.md ｜ https://milvus.io/docs/prepare-source-data.md
 【必须注意】
 ・Parquet / Lance / Iceberg / Vortex / milvus-table（GA 新增，可把 Milvus 集合/快照当外部源）；外部字段类型映射在 create 时定；建集合前要有对象存储访问凭据。
@@ -158,7 +158,7 @@ EDITOR:END -->
 ### 7.2.4.1 快照是什么
 
 <!-- EDITOR:BEGIN 7.2.4.1
-【本节要写什么】3–6 行 + 一张"快照 / 备份 / 副本"三者区别表（易混，必须辨析）。
+【本节要写什么】3–6 行：把快照、备份、副本三者的区别分三小段辨析清楚，这里最容易混。
 【先读这些】https://milvus.io/docs/manage-snapshots.md ｜ https://milvus.io/docs/snapshot-use-cases.md
 【必须注意】
 ・时点只读视图；按段引用而非复制，创建只写元数据/manifest、不复制向量数据（近零）；但快照会钉住被引用文件不被 GC，保留成本≈集合大小，极端可达 2×，需定期清理；依赖 Storage V3 已开启。
@@ -195,12 +195,12 @@ EDITOR:END -->
 ### 7.2.4.4 快照与备份恢复的分工
 
 <!-- EDITOR:BEGIN 7.2.4.4
-【本节要写什么】一张对照表（解决什么问题/是否跨实例/是否依赖对象存储/可回滚粒度），正文不超过 12 行。
+【本节要写什么】分点说清四件事：它解决什么问题、是否跨实例、是否依赖对象存储、能回滚到什么粒度；整节控制在 12 行以内。
 【先读这些】https://milvus.io/docs/multi-storage-backup-and-restore.md ｜ https://milvus.io/docs/cross-bucket-backup-and-restore.md ｜ https://milvus.io/docs/shared-bucket-backup-and-restore.md ｜ https://milvus.io/docs/single-instance-backup-and-restore.md
 【必须注意】
 ・Chapter 6《Milvus底层架构详解》讲的是架构容错，此处只讲数据面备份恢复，勿重述架构。
 ・只做分工表，不重述 Ch6 的架构容错。
-【写完自检】表能当速查卡用；读者不看正文也能据此做决定。
+【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
@@ -234,10 +234,10 @@ EDITOR:END -->
 ### 7.2.5.3 改造前后对照
 
 <!-- EDITOR:BEGIN 7.2.5.3
-【本节要写什么】一张两列表（2.6 做法 / 3.0 做法），加一段 > ⛳ **架构演进提示**。这是本章最好教学点，务必用表格不用长段落。
+【本节要写什么】先写 2.6 的做法，再写 3.0 的做法，两段散文形成对照，配一段 `> ⛳ **架构演进提示**` 收口——这是本章最好的教学点。
 【先读这些】https://milvus.io/docs/add-fields-to-an-existing-collection.md ｜ https://milvus.io/docs/alter-collection-field.md
 【必须注意】左列必须是 2.6 的真实做法（不是简化版），右列每一步都要能指到 7.2.3/7.2.4 的节号；不要把 2.6 写成"做不到"。
-【写完自检】表能当速查卡用；读者不看正文也能据此做决定。
+【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 

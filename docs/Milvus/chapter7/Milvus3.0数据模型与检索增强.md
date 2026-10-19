@@ -28,7 +28,7 @@ EDITOR:END -->
 ### 7.3.2.1 它解决什么建模问题
 
 <!-- EDITOR:BEGIN 7.3.2.1
-【本节要写什么】3–6 行 + 一张表（"一文档多切片"在 2.6 的三种凑合写法 vs 3.0 的 StructArray），点明"父子同集合、一次写入、检索时按子元素返回"。
+【本节要写什么】3–6 行 + 分点写清，不要做成表格（"一文档多切片"在 2.6 的三种凑合写法 vs 3.0 的 StructArray），点明"父子同集合、一次写入、检索时按子元素返回"。
 【先读这些】https://milvus.io/docs/array-of-structs.md ｜ https://milvus.io/docs/best-practices-for-array-of-structs.md
 【必须注意】
 ・Ch3（3.3.6 动态字段 / JSON 字段）讲过"弱结构扩展"，此处只对比"嵌套数组对象"这一新类型，不重讲 JSON。
@@ -72,9 +72,9 @@ EDITOR:END -->
 ### 7.3.2.5 操作符
 
 <!-- EDITOR:BEGIN 7.3.2.5
-【本节要写什么】一张算子表（算子/作用/示例表达式），正文不超过 15 行。
+【本节要写什么】逐个算子各写一条：算子名、作用、示例表达式，正文不超过 15 行。
 【先读这些】https://milvus.io/docs/struct-array-operators.md
-【必须注意】算子只列官方 text-match 页现表里的那几类，别自造函数名；示例表达式必须是可执行语法。
+【必须注意】算子只列官方 text-match 页面里给出的那几类，别自造函数名；示例表达式必须是可执行语法。
 【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
@@ -86,7 +86,7 @@ EDITOR:END -->
 【先读这些】https://milvus.io/docs/structarray-limits.md ｜ https://milvus.io/docs/best-practices-for-array-of-structs.md
 【必须注意】
 ・️ 用 > ⚠️ **注意** 收口，明确"先查限制再设计 schema"的顺序。
-【写完自检】表能当速查卡用；读者不看正文也能据此做决定。
+【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
@@ -119,7 +119,7 @@ EDITOR:END -->
 ### 7.3.3.3 行级 TTL
 
 <!-- EDITOR:BEGIN 7.3.3.3
-【本节要写什么】一张对比表（集合级 TTL vs 行级 TTL：作用范围/配置位置/依赖字段/清理粒度），这是最容易写混的地方。
+【本节要写什么】分两段对照写：集合级 TTL 与行级 TTL 各自的作用范围、配置位置、依赖字段、清理粒度——这是最容易写混的地方。
 【先读这些】https://milvus.io/docs/set-collection-ttl.md （找页内小节 "Set entity-level TTL"） ｜ https://milvus.io/docs/timestamptz-field.md
 【必须注意】
 ・Ch3（3.10 数据过期管理 = 集合级 TTL）已写旧机制，**只写差异，不重讲集合级用法**。
@@ -134,7 +134,7 @@ EDITOR:END -->
 ### 7.3.4.1 TEXT 与 VarChar 的分界
 
 <!-- EDITOR:BEGIN 7.3.4.1
-【本节要写什么】一张表（类型/长度上限/可建什么索引/可用于哪些算子/存储位置）。
+【本节要写什么】分点写清，不要做成表格（类型/长度上限/可建什么索引/可用于哪些算子/存储位置）。
 【先读这些】https://milvus.io/docs/text.md ｜ https://milvus.io/docs/string.md
 【必须注意】
 ・TEXT 去掉短文本长度限制，短的内联、超长的走大对象存储且 compaction 只搬引用；这是 RAG 长文场景的关键变化。
@@ -189,7 +189,7 @@ EDITOR:END -->
 【本节要写什么】一段代码给出 COUNT/SUM/AVG/MIN/MAX + group-by 的返回样例（贴真实输出 JSON）。
 【先读这些】https://milvus.io/docs/get-and-scalar-query.md （找页内小节 "Aggregate Query Results"） ｜ https://milvus.io/docs/search-aggregation.md
 【必须注意】
-・Ch3（3.6.4 统计查询）是客户端聚合/过取老写法——**必须画一张"旧写法 vs 新写法"两步对照**，这是本节最大价值。
+・Ch3（3.6.4 统计查询）是客户端聚合、过取的老写法——**必须写清"旧写法 → 新写法"的两步对照**，这是本节最大价值。
 ・️ 提醒读者：统计口径是"命中集合"而非"全表"时，要写清 filter 的作用范围。
 ・必须画"旧写法（客户端聚合/过取）vs 新写法（一次请求）"两步对照；写清 filter 决定统计口径。
 【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
@@ -226,12 +226,12 @@ EDITOR:END -->
 ### 7.3.6.1 与客户端 Reranker 的分工
 
 <!-- EDITOR:BEGIN 7.3.6.1
-【本节要写什么】一张表（重排位置/是否多一跳网络/延迟影响/可组合性/适用场景），用 `> ⛳ **架构演进提示**` 收口。
+【本节要写什么】分点写清，不要做成表格（重排位置/是否多一跳网络/延迟影响/可组合性/适用场景），用 `> ⛳ **架构演进提示**` 收口。
 【先读这些】https://milvus.io/docs/model-ranker-overview.md ｜ https://milvus.io/docs/rerankers-overview.md
 【必须注意】
 ・Ch6《Milvus Reranker 重排》讲的是**外部模型/客户端 ranker**，此处只讲服务端函数链，明确"两条路都在，怎么选"。
 ・Ch6 讲的是外部模型/客户端 ranker，这里只讲服务端函数链，并回答两条路怎么选。
-【写完自检】表能当速查卡用；读者不看正文也能据此做决定。
+【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
