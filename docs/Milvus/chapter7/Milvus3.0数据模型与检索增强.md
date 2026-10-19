@@ -2,7 +2,7 @@
 
 <!-- EDITOR:BEGIN 本子章节定位
 写什么：StructArray、可空向量/默认值/TIMESTAMPTZ/行级 TTL、TEXT 与四类匹配算子、MinHash DIDO、服务端排序/聚合/分面、服务端重排函数链、中文检索增强。
-不写：向量/索引/Schema 基础概念（Ch2、Ch3），全文+稀疏混合检索入门（Ch5），客户端 Reranker 用法（Ch6）。
+不写：向量/索引/Schema 基础概念（Ch2、Ch3），基于 BM25 的混合检索入门（Ch4），客户端 Reranker 用法（Ch6）。
    共通规矩（每节都适用）：
      1) 开头一句回答"本节解决什么"，第二句说"不解决什么"；
      2) 每段代码前说清前提、后说清预期输出，贴出的代码必须能跑；
@@ -164,7 +164,7 @@ EDITOR:END -->
 【先读这些】https://milvus.io/docs/minhash-function.md ｜ https://milvus.io/docs/minhash-lsh.md
 【必须注意】
 ・DIDO=输入文档、输出签名向量，函数由内核驱动；典型场景=语料清洗、爬取内容去重。
-・Ch5 的 BM25 稀疏混合检索不重述，只写 MinHash 这条新链路。
+・Ch4 的 BM25 混合检索（含稀疏向量用法）不重述，只写 MinHash 这条新链路。
 【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
@@ -264,7 +264,7 @@ EDITOR:END -->
 【本节要写什么】给一套可直接复用的中文 BM25 配置（分析器 + 拼音 + 同义词 + 数字规范化），并给"改前/改后检索效果对照"两行示例结果。
 【先读这些】https://milvus.io/docs/chinese-analyzer.md ｜ https://milvus.io/docs/pinyin-filter.md ｜ https://milvus.io/docs/synonym-filter.md ｜ https://milvus.io/docs/decimaldigit-filter.md ｜ https://milvus.io/docs/multi-language-analyzers.md ｜ https://milvus.io/docs/choose-the-right-analyzer-for-your-use-case.md
 【必须注意】
-・Ch5 全文检索入门已讲 BM25 基本式，此处只写分析器/词典侧增量。
+・Ch4 已讲 BM25 基本式，此处只写分析器/词典侧增量。
 【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
