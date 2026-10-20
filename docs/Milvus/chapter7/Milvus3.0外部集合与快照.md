@@ -168,6 +168,19 @@ EDITOR:END -->
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
+先接上 7.0 留下的那条线。外部集合让数据不必搬进来，快照就是在这份数据上按时间点按下的暂停键——7.0 里关于 Storage V3 与快照的那几段，原样搬到这里：
+
+这条主线上还有两个配套。**Storage V3（Loon）** 是新的存储格式，官方称它是快照与外部集合的"基础"：
+
+> **Snapshot** — point-in-time read-only collection views by segment reference, with near-zero marginal storage.
+
+合起来的效果是：数据不必先搬进来（外部集合），同时还能拿到一份**时点视图**——官方强调的两个词是 point-in-time 与 near-zero marginal storage，也就是"按某个时间点的状态看数据"和"额外存储几乎为零"。
+
+官方在这一节开头交代了它要解决的场景：在线服务和批处理任务需要同时看同一份集合——A/B 评测、大规模查重、回填校验、版本回滚，都要求“写入照常进行，但视图不许动”。快照就是这个不动的参照点：它引用已有的段而不是复制数据，所以边际存储几乎为零，批任务在快照里读、活集合照常写。细节见 7.2。
+
+> ⚠️ **注意**：**Storage V3（Loon）默认关闭**，要用依赖它的能力，得在配置里把 `common.storage.useLoonFFI` 打开。
+
+
 ### 7.2.4.2 实操：创建·列举·恢复·删除
 
 <!-- EDITOR:BEGIN 7.2.4.2
@@ -205,6 +218,21 @@ EDITOR:END -->
 EDITOR:END -->
 
 ## 7.2.5 Schema 在线演进：加列·回填·删列
+
+7.0 说过，在线改字段有两条限制值得记住，第一条就是这里的事。这段原文从 7.0 迁来，先读它，再看 7.2.5.1 的实操：
+
+**一是新增字段必须可空，回填也不是自动的。**
+
+官方原文：Added user-defined fields must be nullable. Set `nullable=True` when calling `add_collection_field()`. For existing entities, the added field is `NULL` unless you add a scalar field with a `default_value`. 
+
+也就是说，给已经有数据的 collection 加字段，老数据不会自动"长"出新值。把它想成给一张已经有 100 万行的表加一列：
+
+- **这一列对老数据是空的（`NULL`）。** 注意 `NULL` 不是 0，也不是空字符串，而是"这里没有值"。数据库不会猜你想填什么，所以它就空着。
+- **唯一会自动有值的情况**：新加的是标量字段（int、float、varchar 这类），而且你在添加时给了默认值。这样 100 万条老数据会统一读到这个默认值。
+- **如果要给每条老数据填不同的值，就只能自己补。** 官方给的两条路是 upsert（按主键把新值写回对应实体）或者回填流程。加完字段就放着不管，老数据会一直是 `NULL`。
+- **如果新加的是向量字段**，老数据在补上向量之前，按这个字段检索时会被直接跳过——不是排在末尾，而是根本不出现在结果里。
+
+一句话：**加字段只是开了一个空槽；填不填、填什么，取决于有没有给默认值、有没有补写数据。**
 
 ### 7.2.5.1 在线加列与删列
 

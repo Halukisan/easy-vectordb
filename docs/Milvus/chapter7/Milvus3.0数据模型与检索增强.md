@@ -25,6 +25,47 @@ EDITOR:END -->
 
 ## 7.3.2 数组结构体（StructArray）
 
+多向量这条线，7.0 只开了一个头。这里把 7.0 那一整段原文摆在最前面——它讲清了"是什么、有几种检索粒度"，读完它，后面几节的定义、写入、索引才有着落点：
+
+最后一件是**多向量**——它最容易被当成“3.0 的全新能力”，而它在 2.6 线就已经存在；不先把“是什么、有几种检索粒度”说明白，后面 7.3 的示例就只能照着代码抄，抄完也不知道自己用的是哪一种。
+
+**先看它的两种检索粒度。** 一个实体带多个向量，并不等于"3.0 才有能力存多个向量"——**结构数组（StructArray）与相关检索在 2.6 线已经出现**。v2.6.18 写着：
+
+> You can now run vector search on Struct Array fields at the granularity of individual elements instead of the whole row, with each result reporting the matched element's offset within the array.
+
+v2.6.16 还有一条：Bumped Go SDK to v2.6.4 with full struct-array support (vector sub-fields, EmbeddingList search, schema validation)。所以 3.0 做的是**在这套结构上继续加能力**，官方那句动机是对旧假设的批评，而不是对 2.x 能力的描述：
+
+> The "one entity = one vector" assumption no longer fits modern retrieval. Long documents get split into many chunks, late-interaction models such as ColBERT emit one vector per token, and multimodal entities can carry several views.
+
+> 一个实体对应一个向量的假设已经不再适用现代检索需求，长文档可能拆成多个片段；ColBERT这类late-interaction模型会为每个token生成一个向量；多模态实体也可能包含多个视角或表示。
+
+要真正理解这条主线，得先分清**两种检索粒度**——它们共用一份嵌套数据，但查询形态和返回结果完全不同。
+
+> 这里的嵌套数据的含义是：数据并不是所有的字段都平铺在实体上，而是实体里面还有一组结构化子项。例如文章实体里面有多个chunks，每个chunks有文本、页码、向量等字段。
+
+> 下面提到的StructArry就是用来存储这组子项的字段类型
+
+**其一，按实体出结果（EmbeddingList 搜索）。** 把 StructArray 某个向量子字段里的向量整体看作"这条实体的向量列表"，查询本身也是一个向量列表，Milvus 用 `MAX_SIM*` 指标族比较两个列表，返回**命中的实体**。官方定义：
+
+> EmbeddingList search treats the vectors inside a StructArray vector subfield as one embedding list for the parent entity. The query is also an embedding list. Milvus compares the query embedding list with the stored embedding list by using a `MAX_SIM*` metric and returns matching entities.
+
+> EmbeddingList搜索会把StructArray向量子字段中的多个向量视为所属父实体的一份向量列表。查询本身也以向量列表的形式提供。Milvus使用MAX_SIM*指标比较查询向量列表与已存储的向量列表，并返回匹配的实体。
+> > 这里举个例子，比如一篇文章被拆分成为多个片段，每个片段都有一个向量表示；这些向量合起来就是这篇文章的向量列表。文档示例中，StructArray可以把多个chunk及其向量存放在同一个父实体下。
+
+> >  查询的时候，用的是一组向量，ColBERT会把查询拆成token并为其生成向量列表，再与文档的向量列表比较。
+
+> > MAX_SIM* 是embeddingList搜索的时候使用的一类指标，它负责比较查询向量和实体向量列表，搜索结果依然按照父实体返回，*号表示一类指标，比如MAX_SIM_COSINE、MAX_SIM_IP 和 MAX_SIM_L2。具体分数怎么算，本篇不展开公式。这里只记两条结论：**查询是向量列表；返回的是父实体，不是其中某个元素。** 它对应的典型用法是 late interaction——ColBERT 给每个 token、ColPali 给每个 patch 各生成一个向量，匹配的细粒度发生在列表内部，但结果仍然落到文档或页面这一级。
+
+**其二，按元素出结果（element-level 搜索）。** StructArray 里的每个 Struct 元素各自作为独立候选，命中就返回那个元素，未分组时还能给出它在数组中的下标。官方定义：
+
+> Element-level search treats each Struct element as an independent vector-search candidate. Each hit represents a matched element inside the StructArray field, and ungrouped results can expose the element offset.
+
+此时查询是**普通向量**，指标也是普通向量指标（`COSINE` / `IP` / `L2`），返回的是"最相关的那一段、那一页、那个 patch"。
+
+所以两种方式不是新旧替代，而是**结果粒度不同**。选哪个，取决于你要的结果长什么样：**目标是实体级结果，就用 EmbeddingList 搜索；要返回匹配的 Struct 元素（带 offset），就用 element-level 搜索。**
+
+> **注意**：一条向量字段或向量子字段**只能创建一个索引**，而两种搜索用的指标不同。官方因此明确要求：同一集合既要实体级又要元素级，就**拆成两个向量子字段**。原文：If your collection needs both EmbeddingList search and element-level search, use two separate vector subfields. A vector field or vector subfield accepts only one index, and the two search modes require different metric families.
+
 ### 7.3.2.1 它解决什么建模问题
 
 <!-- EDITOR:BEGIN 7.3.2.1
@@ -90,6 +131,13 @@ EDITOR:END -->
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
+7.0 说的第二条限制，属于这里：
+
+**二是"改集合字段"与"改 StructArray 内部结构"不是一回事。** 集合级字段可以整体增删，但子字段不行。官方原文：You can drop a whole `ARRAY<STRUCT>` field, but you cannot drop an individual sub-field inside an `ARRAY<STRUCT>` field. 加子字段同样不行：After a StructArray field is created, you cannot add new subfields to that existing StructArray field. 需要调整子字段结构时，官方给的做法是先 `drop_collection_field()` 删掉整个 StructArray，再按新的 Struct schema 重新添加。
+
+所以准确的说法是：**3.0.0 让集合级字段的变更可以在服务运行中完成；它并没有改变"StructArray 的内部结构只能整体重建"这条约束。**
+
+
 ## 7.3.3 字段属性：可空 · 默认值 · 时区 · 行级 TTL
 
 > 本节只改字段属性，不改列结构；加列 / 删列 / 回填见 7.2.5。
@@ -130,6 +178,14 @@ EDITOR:END -->
 EDITOR:END -->
 
 ## 7.3.4 长文本字段 TEXT 与匹配算子
+
+TEXT 这一项，7.0 把官方的定位讲得最透，原文搬来当引子，字段分界与算子在下面两节展开：
+
+**三是 TEXT 长文本字段。** 官方这一项的小标题就叫 TEXT long-text fields，原话是：
+
+> TEXT fields make long text first-class, with storage-side length limits removed: they support `text_match`, `phrase_match`, and BM25.
+
+紧接着是存储细节：`Values under 64 KB stay inline; larger values go to partition-level LOB files in Vortex format, with the column storing only (file_id, offset) references.`，而且 LOB 文件跨段共享，压缩整理时搬的是引用、不是重写正文。对写教程的人来说，这项能力真正省事的地方在官方最后那句：`For RAG this means retrieving vectors and source text from the same store in one IO — no external blob store to operate.`——**向量与原文在同一个库里一次取回**，不必再自己维护一个对象存储专门放原文。它为什么算“数据模型扩展”：字段类型本身装得下长文本了，匹配算子也随之进到这一类字段上。字段分界与算子用法在 7.3.4 展开，这里不重复。
 
 ### 7.3.4.1 TEXT 与 VarChar 的分界
 
@@ -183,6 +239,19 @@ EDITOR:END -->
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
 
+下面几段从 7.0 原样迁来，从排序说起：
+
+分面之外，另外四项各自补的是另一个缺口。
+
+**服务端 ORDER BY** 的官方原话是 ：
+
+`Search and Query now accept multi-field ordering, with the sort pushed down into the Milvus kernel and ASC / DESC settable per field.`，
+
+它同时点出了要补的坑：`Top-K by distance alone often does not match the business need when the most similar item is not the cheapest, the most recent, or the most popular.`。
+
+说人话就是：和你查询最像的东西不一定是最便宜、最新或最热的；以前“按距离取 top 再按价格重排”只能多取一批回然后在本地计算，现在把排序条件直接写进请求。
+
+
 ### 7.3.5.2 查询侧排序与聚合
 
 <!-- EDITOR:BEGIN 7.3.5.2
@@ -195,6 +264,11 @@ EDITOR:END -->
 【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
+
+第二件是聚合，7.0 的原文：
+
+**查询聚合** 官方给的是 `COUNT / SUM / AVG / MIN / MAX with group-by, evaluated server-side`，并强调 `Aggregation is evaluated server-side after filtering.（聚合是在过滤之后由Milvus服务端执行的）`。这里最关键的是“**过滤之后**”这个顺序——统计对象是符合条件的数据，不是整个集合。
+
 
 ### 7.3.5.3 分面检索
 
@@ -234,6 +308,14 @@ EDITOR:END -->
 【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
 【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
 EDITOR:END -->
+
+函数链这件事，7.0 只点到为止。原文连同官方讲解视频，一起搬到这里：
+
+> 这里推荐 Zilliz 官方的讲解视频：
+【商品推荐中，为什么不能只看相似度？Milvus FunctionChain检索、打分、重排精讲】 https://www.bilibili.com/video/BV16tJC6rENw/?share_source=copy_web&vd_source=2ee6373221bc82cfd994fdd5d96888f5
+
+**Function Chain 重排** 的官方原话是 `Reranking is now composable through the Function Chain API, which executes an ordered, typed pipeline as part of a single search request（可以通过Function Chain API 将多个重排操作按照顺序组合成一个流程，并在一次搜索请求中执行）.`，这一版还加入了原生 XGBoost 打分用于 L0 重排。它替你省掉的是“检索调一次、重排再调一次、再自己把结果拼回来”这条客户端流水线：重排逻辑变成库里一段可声明、可组合的链。细节见 7.3.6。
+
 
 ### 7.3.6.2 声明式重排实操
 
