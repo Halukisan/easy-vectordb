@@ -1,30 +1,5 @@
 # Chapter 7.1 Milvus 3.0 版本演进与环境升级
 
-<!-- EDITOR:BEGIN 总说明（审核通过后，用 .temp/strip_editor_notes.py 一键删掉所有 EDITOR 块）
-   状态：草稿。未写入 docs/.vitepress/config.js 的 sidebar / nav，读者不可见。
-   挂载片段（审核通过后贴到 '/Milvus/' 数组尾部）：
-   { text: 'Chapter 7 · Milvus 3.0x 新特性', items: [
-     { text: '版本演进与环境升级', link: '/Milvus/chapter7/Milvus3.0版本演进与环境升级' },
-     { text: '外部集合与快照', link: '/Milvus/chapter7/Milvus3.0外部集合与快照' },
-     { text: '数据模型与检索增强', link: '/Milvus/chapter7/Milvus3.0数据模型与检索增强' },
-     { text: '索引与写入引擎', link: '/Milvus/chapter7/Milvus3.0索引与写入引擎' },
-     { text: '端到端实战', link: '/Milvus/chapter7/Milvus3.0端到端实战' },
-   ]},
-   编号约定：大章节 = Chapter 7，本子章节 = 7.1（沿用 Chapter 6《Milvus底层架构详解》用 "Chapter 1.1 / 1.1.x" 的先例）。
-   范围红线：只讲 Milvus 本体（Milvus + pymilvus + 官方 3.0.x 文档）。对比只允许发生在 Milvus 2.6 ↔ 3.0 之间。
-   统一术语：外部集合（External Collection）、快照（Snapshot）、存储引擎 V3（Storage V3 / Loon）、数组结构体（StructArray）、写前日志（Woodpecker WAL）。
-   篇幅配比：讲 55% ／ 练 35% ／ 读 10%；全章约 36 页（500 字/页）。练习只给验收标准，不给答案。
-   共通规矩（每节都适用）：
-     1) 开头一句回答"本节解决什么"，第二句说"不解决什么"；
-     2) 每段代码前说清前提、后说清预期输出，贴出的代码必须能跑；
-     3) 数字只写自己跑出来的，未跑写"待补测"；只有官方原文明确写的才能称"官方口径"；
-     4) 限制单独成块，不混进正文；已知限制不准用"暂不支持"一句带过；
-     5) 只做 2.6 与 3.0 的对比，不与其他检索库比较；
-     6) 术语按本文件头统一，英文原词首次出现加括号。
-   注释怎么用：每节标题下一条 EDITOR 注释，含【本节要写什么】【参考资料】【必须注意】【写完自检】【删除】；
-     动笔前先读【参考资料】，写完对着【写完自检】验收，定稿后删掉整块注释（或跑 .temp/strip_editor_notes.py）。
-EDITOR:END -->
-
 ## 7.1.0 本章导读：3.0 改的不是功能清单，是默认做法
 
 如果你只读过前面 2.x 的内容，3.0 很容易被误解成“又加了一批索引和参数”。实际上它同时改了三件事的默认做法：
@@ -55,185 +30,257 @@ EDITOR:END -->
 
 ## 7.1.1 学习目标
 
-<!-- EDITOR:BEGIN 7.1.1
-【本节要写什么】动词起头 4–6 条，每条一句。建议覆盖：说出 3.0 的定位转折 / 完成 3.0 部署与 2.6 原地升级 / 正确打开两个默认关闭的开关 / 判断某特性在 Lite·Standalone·集群是否可用。
-【必须注意】
-・️ 别写成"掌握所有 3.0 新特性"，本章只管版本与环境认知。
-【写完自检】4–6 条目标都能在本页找到对应节；读者能据此判断要不要读本章。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+本节只划定"本章要让你会什么"，不展开任何特性原理——原理从 7.2 起逐个展开。学完本章，你应当能：
+
+- **说出** 3.0 的定位转折：主叙事不是"更快"，而是"数据不再需要搬进库里"；
+- **说清** 2.6 → 3.0 的四条兼容红线，尤其是"启用改序列化格式的特性后，回滚窗口永久关闭"这一条；
+- **完成** 3.0 单机部署，或把已有 2.6 单机原地升级到 3.0；
+- **打开** 两个默认关闭的开关——存储引擎 V3（Loon）与新版索引版本，并说清"不开"会怎样；
+- **判断** 某个 3.0 特性在 Lite / Standalone / 集群三种形态下是否可用、需要什么前置条件。
 
 ## 7.1.2 Milvus 3.0 的定位与演进脉络
 
 ### 7.1.2.1 一句话转折
 
-<!-- EDITOR:BEGIN 7.1.2.1
-【本节要写什么】3–5 行讲完，不铺陈。落点=3.0 的主叙事不是"更快"，而是"数据不再需要搬进库里"。
-【先读这些】https://milvus.io/docs/release_notes.md （v3.0.0 开头两段）｜ https://github.com/milvus-io/milvus/releases/tag/v3.0.0
-【必须注意】
-・首发 GA 2026-07-29，最新补丁 v3.0.2（2026-09-20，写作基线）；叙事三段——Storage V3 打底座 → 外部集合 + 快照 两种新范式 → schema 在线演进 / 超大规模索引 / WAL 解耦 补齐工程闭环。
-・Chapter 1（1.3.1 Milvus 的定位与发展）已讲"Milvus 是什么"，此处只写 2.x→3.0 的转折，不复述发展史。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+3.0 的主叙事不是"更快"，而是"数据不再需要搬进库里"。在 2.x 时代，湖上的表（Parquet / Lance / Iceberg）要参与检索，得先写一段 ETL 把它们拷进 Milvus——多付一份存储，多维护一条同步管道，数据治理权也被挪出了团队。3.0 用存储引擎 V3（Storage V3）把底层换成"manifest + 对象存储"，外部集合（External Collection）直接引用湖文件原地建索引、原地查询，快照（Snapshot）按段引用给出时点只读视图。数据留在原地，Milvus 只接管 schema、索引与查询执行。
 
 ### 7.1.2.2 beta 与 GA 的两步节奏
 
-<!-- EDITOR:BEGIN 7.1.2.2
-【本节要写什么】一小段 + 两段对照着写（beta 立骨架 / GA 补闭环），不要做成表格。
-【先读这些】https://milvus.io/docs/release_notes.md#v30-beta ｜ https://github.com/milvus-io/milvus/releases/tag/v3.0.0 （"What's new in 3.0.0 (since 3.0-beta)"）
-【必须注意】
-・beta 首次出现＝外部集合、快照、TTL、ORDER BY、查询聚合、MinHash、EmbList+DiskANN、Woodpecker、Storage V3；GA 补＝外部集合工作流完整、在线加列/回填/删列、schema 与索引同步演进、重排函数链、聚合上搜索路径（分面）、稀疏索引换代、超大规模优化、索引引擎直通、Woodpecker 独立部署。
-・不要在此逐条解释特性做什么（7.2–7.4 各自展开）。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+3.0 分两步走完：2026-05-09 的 3.0-beta 先把"湖仓原生"骨架立起来，2026-07-29 的 v3.0.0 GA 再把工作流补齐成可上线闭环。理解这个节奏，能避免把两条 release notes 混在一起读。
+
+**beta 立骨架**：外部集合、快照、Query / Search 的 ORDER BY、查询聚合（COUNT / SUM / AVG / MIN / MAX + group-by）、可空向量、Entity TTL、文件资源（词典 / 同义词 / 停用词）、MinHash DIDO、EmbList + DiskANN、Force Merge、Storage V3——这些范式性能力都在 beta 首次出现。
+
+**GA 补闭环**：外部集合工作流补全（外部列可喂函数输出字段、refresh 支持增量 schema 演进）、在线加列 / 回填 / 删列、StructArray 与分面检索补齐检索引擎、Function Chain 重排、稀疏索引换代（SINDI / Block-Max WAND / Block-Max MaxScore）、FAISS 索引直通、TEXT 长文本、Vortex 与 Lance 格式支持、Woodpecker 独立部署。
+
+一句话总结：beta 回答"能不能"，GA 回答"能不能上生产"。
 
 ### 7.1.2.3 四条兼容性红线
 
-<!-- EDITOR:BEGIN 7.1.2.3
-【本节要写什么】用 > ⚠️ **注意** 逐条列。这四条是全大章的公共前提，后续子章节会反复回指，务必写准。
-【先读这些】https://milvus.io/docs/release_notes.md （"Compatibility and behavior notes"）
-【必须注意】
-・重点（照此口径，数值勿改）：
-・Chapter 1 的"系统要求/硬件建议"不重写。
-・四条红线要能被后文直接引用，数值一个字都不能改；第 2 条"回滚窗口永久关闭"是全章最贵的一句，务必写准。
-【要点】
-・1) Storage V3（Loon）默认关闭，快照、TEXT 依赖它，需手工开 common.storage.useLoonFFI；后续版本才会默认启用；
-・2) 2.6 → 3.0 兼容且可回滚，但一旦启用/使用了改变序列化格式的特性（如 Storage V3），回滚窗口永久关闭；
-・3) 新引入的索引算法默认不生效，需 dataCoord.targetVecIndexVersion=10、dataCoord.targetScalarIndexVersion=4；
-・4) GPU 镜像迁至 CUDA 12.9，不再保留 Ubuntu 20.04 兼容。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+这四条来自 v3.0.0 release notes 的 "Compatibility and behavior notes"，是全章的公共前提，后文会反复回指，数值与措辞一个字都不要改：
+
+> ⚠️ **注意**
+>
+> 1. **存储引擎 V3（Loon）默认关闭**。依赖它的能力（快照、TEXT 字段）需要手工打开 `common.storage.useLoonFFI`；官方口径是"后续版本才会默认开启"。
+> 2. **2.6 → 3.0 兼容、可回滚**，但一旦启用或使用了会改变序列化格式的特性（例如 Storage V3），回滚就再也回不去——回滚窗口永久关闭。
+> 3. **新索引版本默认不生效**。新引入的索引算法需要手工把目标版本抬到 `dataCoord.targetVecIndexVersion=10`、`dataCoord.targetScalarIndexVersion=4` 才会生效；后续版本才会默认开启。
+> 4. **GPU 镜像迁移到 CUDA 12.9**，不再保留 Ubuntu 20.04 的 GPU 兼容。
+
+其中第 2 条是全章最贵的一句话：要不要开 Loon，本质是"要不要永久放弃回滚 2.6 的能力"。做决定前，先在实验环境把 7.1.4 的升级与开关流程完整演练一遍。
 
 ## 7.1.3 版本对照与客户端门槛
 
 ### 7.1.3.1 服务端与 SDK 对照说明
 
-<!-- EDITOR:BEGIN 7.1.3.1
-【本节要写什么】用分点写清，不做成表格，也不写操作步骤。逐项给出 Milvus、pymilvus、Node.js SDK、Java SDK、Go SDK 的对应版本。
-【先读这些】https://github.com/milvus-io/milvus/releases/tag/v3.0.0 ｜ https://milvus.io/docs/install-overview.md ｜ https://milvus.io/docs/release_notes.md
-【必须注意】
-・v3.0.0 官方配套＝Milvus 3.0.0 / pymilvus 3.0.1 / Node.js 3.0.3 / Java 3.0.5 / Go 3.0.0；pymilvus 现行 3.0.2。
-・️ 关键提醒：服务端 3.0.x 与 Lite 的 3.1/3.2.x 是两套号段，别写成"Milvus Lite 3.0"。
-・Chapter 1（1.3.3）已对比过 Lite/Standalone/集群的差异定位，此处只做版本与 SDK 对应。
-・版本对应关系以 GitHub v3.0.0 release 页为准：Milvus 3.0.0 / pymilvus 3.0.1 / Node 3.0.3 / Java 3.0.5 / Go 3.0.0；pymilvus 现行 3.0.2。Lite 是另一套号段，禁止写"Milvus Lite 3.0"。
-【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+Milvus v3.0.0（2026-07-29 GA）官方配套的 SDK 版本如下，以 GitHub 上 v3.0.0 release 页的版本表为准：
+
+- **Python 客户端（pymilvus）**：配套 3.0.1，写作时最新为 3.0.2；
+- **Node.js**：3.0.3；
+- **Java**：3.0.5；
+- **Go**：3.0.0。
+
+选型时有两点要分清：
+
+- 服务端是 **3.0.x** 一条轨；**Milvus Lite 走 3.1 / 3.2.x 另一条轨**，两者号段不同——不要写成"Milvus Lite 3.0"。
+- SDK 版本号不必逐位追平服务端，但官方建议尽量对齐（release notes 每版都附带一份配套矩阵）。判断"要不要上 3.0"的唯一依据是服务端是否已在 3.0.x，而不是 pymilvus 版本号的尾数。
 
 ### 7.1.3.2 Python 版本门槛
 
-<!-- EDITOR:BEGIN 7.1.3.2
-【本节要写什么】两三行 + 一条 > 📌 **前置条件**。
-【先读这些】https://github.com/milvus-io/pymilvus/releases ｜ https://pypi.org/project/milvus-lite/ ｜ https://milvus.io/docs/install-pymilvus.md
-【必须注意】
-・pymilvus 3.x 要求 Python ≥3.9（3.8 停支持）；milvus-lite 3.2.x 要求 Python ≥3.10。
-・️ 不要改动 Chapter 4 现有 pymilvus==2.5.4 的 pin；建议本章加一句"新旧章节各用独立 venv"。
-・版本门槛以 PyPI wheel 元数据与 install-pymilvus.md 现值为准（页面写 3.7+），发布前再核一次，不要凭印象写 3.9/3.10。不要动 Ch4 的 pymilvus==2.5.4 pin，改为建议新旧章节各用独立 venv。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+3.0 的 Python 客户端有两条硬门槛，我已在本机 PyPI 上实跑核过：
+
+| 包 | 版本 | `requires_python` |
+|---|---|---|
+| pymilvus | 3.0.2 | `>=3.9` |
+| milvus-lite | 3.2.2 | `>=3.10` |
+
+> 📌 **前置条件**
+> 官方安装页 install-pymilvus 仍写着"Python 3.7+"，那是滞后口径，以 PyPI 上各包 wheel 的 `requires_python` 元数据为准。**pymilvus 3.x 要求 Python ≥ 3.9（3.8 停止支持）；milvus-lite 3.x 要求 Python ≥ 3.10。** 如果你还在用 ≤3.9 的环境，给新章节单独建 venv：旧章节（Chapter 4 的 `pymilvus==2.5.4`）与新章节（`pymilvus>=3.0.1`）不要共用同一个 Python 环境。
 
 ## 7.1.4 环境升级实操
 
 ### 7.1.4.1 全新部署 3.0 单机版
 
-<!-- EDITOR:BEGIN 7.1.4.1
-【本节要写什么】一段 bash/powershell + 一句"预期输出"。只给**差异片段**，不要重贴整份 compose。
-【先读这些】https://milvus.io/docs/install_standalone-docker.md ｜ https://milvus.io/docs/configure-docker.md ｜ https://milvus.io/docs/dynamic_config.md
-【必须注意】
-・镜像 tag 换 3.0.x；standalone 配置文件与 volume 路径差异项；服务健康检查方式。
-・️ 待你浏览器复核：本机打不开 milvus.io，官方 compose 的确切镜像 tag 请以安装页现值为准。
-・装 Attu、基础 docker 流程、停止与卸载在 Chapter 1（1.5.2–1.5.4）已写，一律不重复。
-【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+3.0 单机版与 2.6 的差异只有一圈，其余安装步骤（装 Docker、准备目录）沿用 Chapter 1（1.5.2–1.5.4）。两版单机的默认形态对比如下：
+
+| 项 | Milvus 2.6 单机 | Milvus 3.0 单机 |
+|---|---|---|
+| 镜像 tag | `milvusdb/milvus:v2.6.x` | `milvusdb/milvus:v3.0.x` |
+| 消息队列 | RocksMQ（嵌入式，默认；Pulsar / Kafka 可选） | Woodpecker（嵌入式 WAL，默认；也可独立部署） |
+| 依赖容器 | etcd + MinIO | etcd + MinIO（compose 自带，未变） |
+| 存储引擎 | Storage V2 | Storage V2 默认，Storage V3 需开 Loon |
+
+做法：下载官方 compose，无需改任何依赖声明，直接拉起——compose 自带 etcd 与 MinIO 两个依赖容器，Woodpecker 作为 WAL 内置在 standalone 中。
+
+```bash
+# 下载官方 standalone compose；URL 里的版本号换成本机要装的版本
+wget https://github.com/milvus-io/milvus/releases/download/v3.0.2/milvus-standalone-docker-compose.yaml -O docker-compose.yml
+# 启动
+docker compose up -d
+# 健康检查：容器状态 + gRPC 端口回连
+docker compose ps
+python3 -c "from pymilvus import MilvusClient; print(MilvusClient(uri='http://localhost:19530').list_collections())"
+```
+
+预期输出：`docker compose ps` 中 `standalone` 为 running / healthy；最后一行打印 `[]`（空集合列表，说明 gRPC 已连通）。也可打开 WebUI `http://127.0.0.1:9091/webui/` 确认实例健康。
+
+> 📌 **前置条件**
+> 镜像 tag 需以官方安装页现值为准：官方页面用 `&#123;&#123;var.milvus_release_tag&#125;&#125;` 占位，本机无法直连 milvus.io 与 Docker Hub 复核，上面的 `v3.0.2` 是本章写作基线（见 7.1.0）。若你拉取时官方已推进到 v3.0.3，替换为对应 tag，其余步骤不变；2.6 单机的 MQ 差异来自 Woodpecker 的定位表述，具体部署形态的历史默认值未逐版核对。
 
 ### 7.1.4.2 从 2.6 原地升级
 
-<!-- EDITOR:BEGIN 7.1.4.2
-【本节要写什么】写成检查单式步骤（升级前备份 → 升级 → 验证 → 再决定是否开新开关）。
-【先读这些】https://milvus.io/docs/upgrade_milvus_standalone-docker.md ｜ https://milvus.io/docs/upgrade_milvus_cluster-helm.md ｜ https://milvus.io/docs/upgrade_milvus_standalone-operator.md ｜ https://milvus.io/docs/upgrade_milvus_cluster-operator.md
-【必须注意】
-・升级前必看 preupgrade 检查项；2.6→3.0 可回滚的前提是没有启用改序列化格式的特性；升级后索引版本/元数据的处理。
-・️ 建议写成一段判断路径：要用快照或 TEXT 吗？→ 那就必须开 Loon；→ 开了还能回滚吗？→ 不能，所以先在实验环境演练一遍。
-【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+把 2.6 单机原地升到 3.0，官方验证过的路径是 Docker Compose **只换镜像 tag、其余一律不动**。整条链是：备份 → 只改镜像 → 拉起 → 验证 → 再决定开不开新开关。
+
+**第 1 步：备份并确认现状**
+
+```bash
+cp docker-compose.yml docker-compose-before-upgrade.yml
+docker compose ps
+```
+
+预期输出：`docker compose ps` 显示 2.6 各服务为 running，元数据与数据目录完好。
+
+**第 2 步：只改镜像 tag**
+
+compose 里只动 `standalone` 服务这一行，etcd、对象存储、数据卷、依赖版本全部保持原样：
+
+```yaml
+services:
+  standalone:
+    image: milvusdb/milvus:v3.0.2   # 2.6 → 3.0 只动这一行
+```
+
+```bash
+docker compose pull standalone
+docker compose up --detach standalone
+```
+
+预期输出：pull 下载 v3.0.2 镜像；`up -d` 只重建 standalone 容器，etcd 与对象存储容器继续运行，数据目录复用到新版本。
+
+**第 3 步：验证**
+
+```bash
+docker compose ps
+docker compose images standalone
+docker compose logs --tail 100 standalone
+```
+
+预期输出：`standalone` healthy、镜像 tag 为 `milvusdb/milvus:v3.0.2`，已有集合仍可查询与检索。**这步通过之前，不要开启任何 3.0 专属特性。**
+
+**第 4 步：再决定开不开新开关**——回到 7.1.4.3 / 7.1.4.4，分别评估 Loon 与新版索引。
+
+> ⚠️ **注意**
+> 官方明确：这条流程**不验证"把镜像改回 2.6.x 做回滚"**——一旦 3.0 写入过数据，仅靠换镜像回滚可能读不了新状态。真出问题，用第 1 步的元数据与数据备份做恢复，恢复方案先在非生产环境演练过。判断"要不要冒险开 Loon"只一句话：要用快照或 TEXT 吗？要 → 必须开 Loon；开了 → 回滚窗口关闭。
 
 ### 7.1.4.3 打开存储引擎 V3（Loon）
 
-<!-- EDITOR:BEGIN 7.1.4.3
-【本节要写什么】milvus.yaml 片段（语言标 yaml）+ 一行验证方式 + 一句"预期输出"。
-【先读这些】https://milvus.io/docs/storage-v3.md ｜ https://milvus.io/docs/release_notes.md （Compatibility notes）
-【必须注意】
-・键名 common.storage.useLoonFFI；默认 false。
-・Loon 的原理放到 7.2.2，本章只讲"怎么开、开了意味着什么"。
-・键名 common.storage.useLoonFFI，默认 false。本页只写"怎么开、开了意味着什么"，原理留给 7.2.2。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+开 Loon 是启用快照、TEXT 等能力的入口，默认关闭，改一个键：
+
+```yaml
+common:
+  storage:
+    useLoonFFI: true
+```
+
+改完让配置生效：官方把该项标为 refreshable（见 `configure_common.md`），应通过部署方式支持的配置更新流程下发，改完在 Milvus WebUI（`http://127.0.0.1:9091/webui/`）里核对当前值；同时官方 Docker 配置页又写明"当前版本所有参数都要重启后才生效"，两处口径并存，稳妥做法是改完重启并复核。
+
+验证方式：在 WebUI 里查 `common.storage.useLoonFFI` 的当前值是否为 `true`；若走 etcdctl，key 是 `<rootPath>/config/common/storage/useLoonFFI`，其中 rootPath 依安装方式而异（Helm 与部分部署默认 `by-dev`，standalone embed etcd 以其自身配置为准，此处仅示意）：
+
+```bash
+etcdctl get by-dev/config/common/storage/useLoonFFI
+```
+
+预期输出：返回 `true`。此后新写入与 compaction 产物走 Storage V3，既有数据在其被后台 compaction 重写前保持原布局，过渡期两种布局都能读。
+
+> 📌 **前置条件**
+> Loon 的原理放到 7.2.2，本页只解决"怎么开、开了意味着什么"。开启后后台 compaction 会把符合条件的老数据逐步迁到 V3 布局；**关掉 `useLoonFFI` 不会把已有 V3 数据同步转回去，也不等于让降级变安全**——这正是红线第 2 条的物理含义。
 
 ### 7.1.4.4 打开新版索引开关
 
-<!-- EDITOR:BEGIN 7.1.4.4
-【本节要写什么】两个键一起给（yaml 片段），并写明"不开会怎样"——索引建了却仍走老路径，而且**不报错**（高频坑，务必上 > ⚠️ **注意**）。
-【先读这些】https://milvus.io/docs/release_notes.md ｜ https://milvus.io/docs/sparse-inverted-index.md ｜ https://milvus.io/docs/index_selection.md
-【必须注意】
-・dataCoord.targetVecIndexVersion=10；dataCoord.targetScalarIndexVersion=4；键名仅见 release notes 的 Compatibility notes，未收录进 configure_datacoord 配置手册；按静态配置处理：改后重启，并对已有段重建索引后验证。
-・Chapter 2（2.3.3 索引类型 / 2.3.7 索引参数）已讲经典索引，此处不重讲。
-・不开不报错，只是仍走老路径——全章最高频的坑，必须单独一个 > ⚠️ 注意，并在 7.4.2.2 回指。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+两个键一起抬，少一个都不算开（官方口径：两个都要手工设）：
+
+```yaml
+dataCoord:
+  targetVecIndexVersion: 10
+  targetScalarIndexVersion: 4
+```
+
+> ⚠️ **注意**
+> 不设这两个键**不报错**——索引照样能建，只是仍走旧路径、用旧算法。这是全章最高频的坑：你建了 SINDI / Block-Max WAND 等新索引、以为生效了，实际上还落在旧实现上。改完这组键要重启，并对**已有段重建索引**后验证效果（这两个键目前只见于 release notes 的 Compatibility notes，未收录进 configure_datacoord 配置手册，按静态配置处理）。
+
+预期输出：重建索引后，新段按目标版本（向量 10 / 标量 4）落盘；排查时通过索引版本或行为差异确认确实走了新实现。
+
+> 💡 **版本说明**
+> 官方口径是"后续版本会默认开启"这两个开关。现阶段被锁在 opt-in，7.4.2.2 会回指这里当作前提。经典索引本身（HNSW / IVF 等）在 Chapter 2 已讲，这里不重复。
 
 ### 7.1.4.5 客户端 pymilvus 升级
 
-<!-- EDITOR:BEGIN 7.1.4.5
-【本节要写什么】一行安装命令 + 一段预告：后续子章节会用到哪些新的客户端能力（只列名，不讲用法）。
-【先读这些】https://milvus.io/docs/install-pymilvus.md ｜ https://milvus.io/docs/using_milvusclient.md ｜ https://github.com/milvus-io/pymilvus/releases
-【必须注意】
-・pip install -U "pymilvus>=3.0.1,<3.1"。3.0.x 客户端线索：alter_collection_schema()（在线改 schema）、FunctionChain 与 XGBoost 表达式辅助、Bloom/Roaring bitmap 构建器、搜索聚合与 group_by_fields、compaction 生命周期观测、dump_messages / get_replicate_info、DataType.TEXT、alter_role/describe_role。
-・️ 每个接口名写前用官方 API 页或 releases 原文核对参数拼写，勿凭记忆。
-【写完自检】示例可独立运行；读者按步骤能复现，并说出每一步的预期输出。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+```bash
+pip install -U "pymilvus>=3.0.1,<3.1"
+```
+
+预期输出：`pip show pymilvus` 显示 Version 在 3.0.x（写作时 3.0.2）。
+
+> 📌 **前置条件**
+> Python ≥ 3.9（见 7.1.3.2），且与旧章节的 `pymilvus==2.5.4` 分 venv。
+
+升级后，后续子章节会用到这些 3.0 客户端能力（这里只列名与出处，用法各自展开）：
+
+- **在线改 schema**：`add_collection_field()` / `add_collection_struct_field()` / `add_function_field()` / `drop_collection_field()`（见 add-fields-to-an-existing-collection、alter-collection-field 页）；
+- **Function Chain 重排与打分表达式**：函数输出字段挂到 Function、在打分表达式里做重排；
+- **Bloom / Roaring 过滤**：`build_bloom_filter()` / `build_roaring_bitmap()` + `membership_match()`（membership-match 页）；
+- **搜索聚合 / 分组 / 分面**：`group_by_fields` 透传与聚合参数（search-aggregation 页）；
+- **长文本**：`DataType.TEXT`（text 页）；
+- **FAISS 索引直通**：`faiss_index_name`（faiss 页）。
+
+> ⚠️ **注意**
+> 另有几个 3.0 客户端能力在编辑线索里被提及、但本机缓存中找不到官方页面原文来核对拼写，暂标"待验证"，使用前先查 pymilvus 3.0.x API 参考：compaction 生命周期观测（`dump_messages()` / `get_replicate_info()`）、权限管理（`alter_role()` / `describe_role()`）。
 
 ## 7.1.5 三种形态的支持边界
 
 ### 7.1.5.1 各特性在三种形态下的支持情况
 
-<!-- EDITOR:BEGIN 7.1.5.1
-【本节要写什么】逐个特性说明它在 Milvus Lite、单机 Standalone、集群三种形态下能不能用、有什么前提：外部集合、快照、Storage V3、TEXT、StructArray、服务端排序聚合与分面、Function Chain、新版稀疏索引、Woodpecker、Force Merge。
-【先读这些】https://milvus.io/docs/milvus_lite.md ｜ https://milvus.io/docs/install-overview.md ｜ https://milvus.io/docs/woodpecker.md ｜ https://pypi.org/project/milvus-lite/
-【必须注意】
-・Lite 是嵌入式引擎，其 snapshot 概念（钉住不可变数据/增量/索引文件并保存 schema 与 manifest 副本）≠ 服务端快照特性，必须显式区分，否则读者会拿 Lite 去试外部集合。
-・️ 官方未逐项明示 Lite 的 3.0 能力边界：不确定的格子写"待验证"，不要猜。
-・Chapter 1（1.3.3）与 Chapter 6《Milvus Lite部署与应用》已讲形态定位与 Lite 装法，此处只填这张新表。
-・先给表再给替代观察方式；Lite 对本章特性的支持以 milvus_lite.md 现文为准，未写明就标"待验证"，不要替官方下结论。
-【写完自检】读者只看这一节就能做出选择；这段内容能反复翻看，不必回正文对照。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+> 💡 **版本说明**
+> Milvus Lite 是嵌入式引擎，版本序列走 3.1 / 3.2.x，与服务端 3.0.x 不同轨。它文档里的"snapshot"指"嵌入式引擎钉住不可变数据 / 增量 / 索引文件并保存 schema 与 manifest 副本"的迁移机制，**不是**服务端的快照特性——别拿 Lite 去试外部集合与快照。
+
+各特性在三种形态下的支持情况（Lite 一列以 milvus_lite 官方页现文为准，官方没写明的标"待验证"）：
+
+| 特性 | Lite | Standalone | 集群 | 备注 |
+|---|---|---|---|---|
+| 外部集合（External Collection） | 待验证 | 支持 | 支持 | 需对象存储 + Loon；只读、靠 refresh 追平 |
+| 快照（Snapshot） | 无（Lite 的 snapshot 是另一概念） | 支持 | 支持 | 依赖 Storage V3（Loon 开） |
+| 存储引擎 V3（Loon） | 待验证 | 支持（默认关） | 支持（默认关） | 需 `common.storage.useLoonFFI` |
+| TEXT 长文本 | 待验证 | 支持 | 支持 | 需 Loon |
+| StructArray 数组结构体 | 待验证 | 支持 | 支持 | 有限制（见 structarray-limits 页） |
+| 排序 / 聚合 / 分面 | 待验证 | 支持 | 支持 | ORDER BY、COUNT/SUM/AVG/MIN/MAX、group-by |
+| Function Chain 重排 | 待验证 | 支持 | 支持 | — |
+| 新版稀疏索引（SINDI 等） | N/A（Lite 仅 FLAT 索引） | 支持 | 支持 | 需抬 `targetVecIndexVersion` |
+| Woodpecker 部署模式 | N/A | embedded（默认） | service（可独立部署） | 详见 7.5 |
+| Force Merge | 待验证 | 支持 | 支持 | compaction 类操作 |
+
+> 💡 **版本说明**
+> 经典索引里 Lite 只会跑 FLAT（无论集合声明什么索引类型）；Lite 支持稀疏向量 / 多向量 / 混合检索，但**不支持 partition、用户/角色、alias**。这些是 Lite 的固定边界，与 3.0 无关，遇到别再逐个踩。
 
 ### 7.1.5.2 本教程的实验环境选择
 
-<!-- EDITOR:BEGIN 7.1.5.2
-【本节要写什么】给读者一句"照我做"的环境建议；明确哪些小节必须有对象存储/集群才跑得动（外部集合、快照备份、Woodpecker 独立部署），并给替代观察方式（看配置、看 Attu、看日志）。
-【必须注意】
-・️ 跑不动的一律标注前置条件，不要假装能跑。
-・替代观察方式要具体到"看哪个输出/哪个目录"，否则读者还是跑不动。
-【写完自检】读者能用自己的话回答本节标题提出的问题，且不需要翻其他资料。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+照我做：用 **Standalone（Docker Compose）+ 嵌入式 Woodpecker + 嵌入式 etcd** 作为本章默认环境。这是唯一"无需额外依赖、又能覆盖大多数 3.0 特性"的形态；除非你要跑外部集合、快照、Woodpecker 独立部署，否则不必上对象存储与集群。
+
+必须额外加依赖的小节：
+
+- **外部集合 / 快照 / 湖仓原生**（7.2 起）：需要对象存储（MinIO / S3 等）+ Loon；
+- **Woodpecker 独立部署**（7.5）：需要集群形态（service 模式）。
+
+跑不动时的替代观察方式（不要硬跑、更不要伪造输出）：
+
+- **看配置**：7.1.4.3 / 7.1.4.4 的开关先看 yaml 落盘、再到 WebUI / etcdctl 里读当前值；
+- **看 WebUI / Attu**：`http://127.0.0.1:9091/webui/` 看集合、段、索引与 compaction 状态；
+- **看日志**：`docker compose logs --tail 100 standalone` 看 Woodpecker、compaction 与脏数据处理。
 
 ## 7.1.6 本章小结
 
-<!-- EDITOR:BEGIN 7.1.6
-【本节要写什么】沿用你既有模板——`本章核心掌握：` + 3–5 条 + 一句衔接（"7.2 起在此环境上实操新特性"）。
-【必须注意】
-・️ 本章只保留三块内容——版本对照、SDK 对照、三种形态的支持情况——加上升级操作，特性原理一律不写，防止与 7.2–7.4 重复。
-【写完自检】以「本章核心掌握：」起头；只看小结也能复述本章三条主线。
-【删除】本节定稿后，连同本注释块（EDITOR:BEGIN … EDITOR:END）一起删除。
-EDITOR:END -->
+本章核心掌握：
+
+- **版本对照**：3.0 是"湖仓原生"重构，不是性能增强版；2.6 → 3.0 可回滚，前提是没启用改序列化格式的特性。
+- **SDK 对照**：服务端 3.0.x 配套 pymilvus 3.0.1+（Python ≥ 3.9）、Node.js 3.0.3、Java 3.0.5、Go 3.0.0；Lite 走 3.1 / 3.2.x 另一套号段。
+- **三条形态边界**：Lite 只做本地快速验证（仅 FLAT、无分区/角色）；Standalone 单机够用；集群才谈规模化与独立 Woodpecker。
+- **两个默认关闭的开关**：Loon（`common.storage.useLoonFFI`）与新版索引（`targetVecIndexVersion=10` / `targetScalarIndexVersion=4`）；开 Loon 前先想清楚"要不要保留回滚 2.6 的能力"。
+
+从 7.2 起，我们就在这套环境上实操新特性：先看外部集合与快照怎么把数据留在原地，再谈 schema 与检索增强。
