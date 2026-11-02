@@ -1,54 +1,8 @@
-# Chapter 7.4 Milvus 3.0 索引、写入与存储引擎（进阶）
+# Chapter 7.4 深入 · 存储与写入引擎
 
-## 7.4.0 这一章给谁看
+> 这是 7.4《索引与性能选择》的底层延伸：那一篇讲「三类新索引各管什么、怎么开、怎么选」，这一篇往下走一层——存储格式、写入引擎、段合并，以及外部集合和快照共用的底座 Storage V3 清单。结论逐条给官方出处；标注测试版/预览的功能会明确提醒。
 
-上一章是「用法」，这一章是「原理与开关」：稀疏索引换了什么算法、FAISS 配方怎么直通、写入路径为什么不再需要 Pulsar/Kafka、段碎片怎么削平，最后一节拆开 Storage V3——外部集合和快照的底座。用不上可以不读——各节会指出适用面和官方限制，遇到稀疏检索性能问题、大语料稀疏索引、或者想搞懂 7.2 里那些反直觉行为时回来看。
-
-**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md)
-
-## 7.4.1 稀疏索引换代：SINDI、Block-Max WAND、Block-Max MaxScore
-
-官方原话：「Milvus 3.0 对稀疏向量索引进行了全面升级。它引入了新的搜索算法——SINDI、Block-Max WAND 和 Block-Max MaxScore——同时还支持倒排列表压缩、可配置量化以及按工作负载选择搜索算法。」
-
-关键数字（官方内部基准）：
-
-> 压缩后的 BM25 索引在可比召回率下比 2.6 稀疏索引小约 3 倍，而 SINDI 在学习型稀疏 Embeddings 上达到的 QPS 最高可达 MaxScore 的 10 倍左右。
-
-换算法怎么生效？需要手动提升目标索引版本，官方发布说明原文：「新引入的索引算法在生效前需要手动将目标索引版本提升（例如将 `dataCoord.targetVecIndexVersion` 设为 10，将 `dataCoord.targetScalarIndexVersion` 设为 4）；在后续版本中，这些功能将默认启用。」
-
-```yaml
-dataCoord:
-  targetVecIndexVersion: 10
-  targetScalarIndexVersion: 4
-```
-
-（配置通过 `user.yaml` 覆盖，修改方法见 7.1.2。）启用后的默认变化，官方原话：「启用新索引版本后，SINDI 将成为稀疏 IP 搜索的默认选项，而 MaxScore 将成为 BM25 的默认选项。」
-
-适用面（官方表述）：「mmap 加载、序列化和 BM25 评分机制也得到了优化，从而降低了大规模稀疏向量和全文搜索的索引存储及加载开销。」——收益在大规模稀疏索引上最明显。
-
-**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md)
-
-## 7.4.2 FAISS 直通：把现成配方搬进来
-
-「FAISS 索引类型是 Milvus 3.0.0 及更高版本中提供的一种专家级直通功能。它允许您提供一个 Faiss 索引生成器字符串，而非选择固定的 Milvus 索引类型。」——你手里有调好的 Faiss 配方，原样搬进来。
-
-适用面要看清：「上游 Faiss 接受的工厂字符串并不一定被 Milvus 自动支持。」兼容性取决于向量字段类型、度量、维度、编译进镜像的 Faiss 模块，以及索引是否支持 Milvus 所需的操作。官方也提醒：常见配方优先用专用索引类型，「因为它具有稳定且有文档记录的参数契约」。
-
-硬性限制：只支持 `FLOAT_VECTOR` 和 `BINARY_VECTOR`（不支持 FLOAT16/BFLOAT16/INT8/SPARSE）；「通用 FAISS 适配器在 CPU 上运行。它不是 Faiss GPU 索引类型」；必须指定 `faiss_index_name` 构建参数。
-
-**参考文档**：[FAISS 索引类型](https://milvus.io/docs/zh/faiss.md)
-
-## 7.4.3 EmbList + DiskANN：嵌入列表的磁盘索引
-
-这是 7.3.2 StructArray 的索引侧配套。官方描述：「EmbList + DISKANN——针对 StructArray 嵌入列表的磁盘上多向量索引，包含 Muvera 和 Lemur 等加速路径。」设计动机：「ColBERT 等晚期交互模型会为每个令牌生成一个向量，而多模态实体可能包含多种视图。EmbList 为每个实体存储一个可变长度的向量列表，并以 DISKANN 作为磁盘索引。当语料库超过内存预算时，磁盘路径可有效控制 RAM 占用量。」
-
-怎么建？在 StructArray 的向量子字段上建 `DISKANN` 索引，搜索走 MAX_SIM（见 7.3.2 引擎依赖关系）。Muvera / Lemur 是同一条官方描述里列出的加速路径，具体用法以当前版本的官方支持说明为准。
-
-什么时候值得换：ColBERT/ColPali 类晚期交互检索、向量总量超出内存。
-
-**参考文档**：[使用 Embeddings 列表进行搜索](https://milvus.io/docs/zh/search-with-embedding-lists.md)
-
-## 7.4.4 存储层新格式：Vortex 与 Lance
+## 一、存储层新格式：Vortex 与 Lance
 
 官方 3.0.0 原文：
 
@@ -58,7 +12,7 @@ dataCoord:
 
 **参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md)
 
-## 7.4.5 写入引擎 Woodpecker：不再需要 Pulsar/Kafka
+## 二、写入引擎 Woodpecker：不再需要 Pulsar/Kafka
 
 「在 Milvus 3.x 中，Woodpecker 是默认的 WAL/消息队列，作为日志服务提供有序写入和恢复功能。无需外部消息队列服务（如 Pulsar 或 Kafka）。」
 
@@ -77,7 +31,7 @@ mq:
 
 **参考文档**：[Woodpecker](https://milvus.io/docs/zh/woodpecker.md)
 
-## 7.4.6 强制合并：削平段碎片
+## 三、强制合并：削平段碎片
 
 「强制合并的目的是将小而零散的数据段合并为较少而较大的数据段，以提高查询性能和存储效率。」它解决标准压缩的遗留问题：标准压缩按「多对一合并」把段压到 `maxSize` 附近，但会留下无法再合并的中等碎片——比上限略小、两两合并又都超限的那种。
 
@@ -87,7 +41,7 @@ mq:
 
 **参考文档**：[强制合并压缩](https://milvus.io/docs/zh/force-merge.md)
 
-## 7.4.7 外部集合与快照的底层：Storage V3 清单
+## 四、外部集合与快照的底层：Storage V3 清单
 
 7.2 里那些「反直觉」的行为——刷新后主键全变、两份文件不去重、不 flush 的快照恢复出 0 行——根子都在这一节。三个问题一次讲清：外部集合刷新时到底做了什么、快照为什么便宜、milvus-table 是什么。
 
@@ -159,18 +113,13 @@ job_id = client.refresh_external_collection(collection_name="snapshot_external_c
 
 **参考文档**：[存储 V3](https://milvus.io/docs/zh/storage-v3.md) · [快照用例](https://milvus.io/docs/zh/snapshot-use-cases.md) · [创建外部 Collection](https://milvus.io/docs/zh/create-an-external-collection.md) · [Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md)
 
-## 7.4.8 小结
+## 五、小结
 
-- 稀疏索引换代三件套：SINDI、Block-Max WAND、Block-Max MaxScore；BM25 索引小约 3 倍，SINDI 学习型稀疏 QPS 可达 MaxScore 的 10 倍；靠 7.1.2 的索引版本开关启用，SINDI/MaxScore 成为各自领域的默认；
-- FAISS 直通是专家级功能：给生成器字符串，只支持 FLOAT/BINARY，CPU，必须 `faiss_index_name`；常规场景用专用索引类型；
-- EmbList + DiskANN：ColBERT/ColPali 的磁盘索引方案，RAM 预算紧时用；
 - 存储层新增 Vortex（内部格式）与 Lance（开放交换格式），Vortex 将成为默认内部格式；
 - Woodpecker 是 3.x 默认 WAL，不再需要 Pulsar/Kafka；`mq.type: woodpecker` 显式指定，切换属于升级操作；
 - 强制合并削段碎片，`target_size` 调目标，当前是预览阶段功能，别上生产；
 - 外部集合与快照的底座都是 Storage V3 的不可变清单：刷新生成「Milvus 字段 → 外部文件」映射，快照写新清单引用旧分段；清单只能引用已落盘分段，所以快照前必须 flush。
 
-**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md) · [FAISS 索引类型](https://milvus.io/docs/zh/faiss.md) · [Woodpecker](https://milvus.io/docs/zh/woodpecker.md) · [强制合并压缩](https://milvus.io/docs/zh/force-merge.md)
+**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md) · [Woodpecker](https://milvus.io/docs/zh/woodpecker.md) · [强制合并压缩](https://milvus.io/docs/zh/force-merge.md) · [存储 V3](https://milvus.io/docs/zh/storage-v3.md) · [快照用例](https://milvus.io/docs/zh/snapshot-use-cases.md) · [创建外部 Collection](https://milvus.io/docs/zh/create-an-external-collection.md)
 
-下一章把所有东西串起来：从一份 Parquet 文件到快照、重排，完整演一遍。
-
-> **下一章**：[7.5　Milvus 3.0 端到端实战](./Milvus3.0端到端实战)
+> 返回：[7.4　索引与性能选择](./Milvus3.0索引与性能选择)

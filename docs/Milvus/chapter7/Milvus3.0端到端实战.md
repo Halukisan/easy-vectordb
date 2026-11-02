@@ -115,7 +115,7 @@ while True:
 
 **Schema 要加列 → 在线加。** 往外部集合加字段后「再次刷新外部 Collection」（官方《修改外部 Collection Schema》流程）；内部托管集合则用 `add_collection_field()`（7.3.1），注意新增用户定义字段必须 `nullable=True`。
 
-**批处理要读 → 用 milvus-table。** 快照按 `milvus-table` 格式注册成外部 Collection（7.4.7），官方说「批处理和服务系统可获得基于同一数据清单的共享视图」。
+**批处理要读 → 用 milvus-table。** 快照按 `milvus-table` 格式注册成外部 Collection（见 [存储与写入引擎·深入](./Milvus3.0存储与写入引擎)），官方说「批处理和服务系统可获得基于同一数据清单的共享视图」。
 
 **要回滚 → 用快照，不用时间机器。** `restore_snapshot` 的产出是一个新集合（官方参数就是 `collection_name`），不是把原集合原地退回——恢复后改业务代码指向新集合。
 
@@ -141,10 +141,10 @@ while True:
 - 快照 = 时间点只读视图，恢复是分段复制，10-100 倍加速（官方口径）；
 - Schema 在线演进、排序/聚合/分面/重排都在同一集合上叠加；
 - 全链路依赖 Storage V3，开关与不可回滚约束见 7.1.2；
-- 进阶原理（SINDI、FAISS 直通、Woodpecker、强制合并、Storage V3 清单）在 7.4，按需回看。
+- 索引选型（SINDI、FAISS 直通、DiskANN）在 7.4；存储与写入引擎底层（Woodpecker、强制合并、Storage V3 清单）见 [存储与写入引擎·深入](./Milvus3.0存储与写入引擎)。
 
 **参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md) · [快照用例](https://milvus.io/docs/zh/snapshot-use-cases.md)
 
 到这儿，Milvus 3.0 从「是什么」到「怎么用」已经闭环。剩下的事交给你的数据。
 
-> **返回**：[序章：Milvus 3.0](./Milvus3.0)　·　**上一章**：[7.4　索引、写入与存储引擎（进阶）](./Milvus3.0索引与写入引擎)
+> **返回**：[序章：Milvus 3.0](./Milvus3.0)　·　**上一章**：[7.4　索引与性能选择（实战）](./Milvus3.0索引与性能选择)
