@@ -2,73 +2,262 @@
 
 ## 7.4.0 这一章干什么
 
-三个真实场景：全文检索、稀疏召回变慢了；稠密向量把内存吃满；手里有一份调好的 Faiss 配方，不想在 Milvus 里从头调参。3.0 对应给了三类新索引——SINDI 稀疏索引、FAISS 直通、EmbList + DiskANN 磁盘索引——这一章讲清「各管什么、怎么启用、怎么选」，选完建索引、小批量验证召回，两步收工。
+三个真实场景：
 
-上一章（7.3）把排序、重排塞进了同一次搜索请求；这一章往下走一层：决定这次请求落在哪个索引上。存储格式、写入引擎、段合并、Storage V3 清单这些底层不在这——想搞懂 7.2 里那些反直觉行为的根子，见 [存储与写入引擎·深入](./Milvus3.0存储与写入引擎)。
+- 全文检索、稀疏召回变慢。BM25 Function 把分词结果写成稀疏向量存进倒排索引（[Full Text Search](https://milvus.io/docs/zh/full-text-search.md)）。随着数据量越来越大，索引文件变大、加载变慢； QPS 下降。
+- 稠密向量占内存。向量条数从千万涨到亿级，索引结构要常驻内存，HNSW 还要再加邻居表的开销。
+- 已经有一套在 Faiss 上调好的索引配置和对应环境（比如工厂字符串、nlist / M / efConstruction 的取值、CPU 规格、并发数），换到 Milvus 后要沿用同一套参数，不想按 Milvus 的固定索引类型重调一遍。
 
-**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md)
+3.0 对应上面三条给了三样东西：
+1. 稀疏倒排索引的新算法（SINDI、Block-Max WAND、Block-Max MaxScore）
+2. FAISS 直通（用 Faiss 工厂字符串直接建索引）
+3. EmbList + DiskANN（StructArray 嵌入列表的磁盘索引）
+
+这一章把这三个问题逐个对上 3.0 的新特性，给出能直接用的索引方案和配置参数。
 
 ## 7.4.1 稀疏索引换代：SINDI、Block-Max WAND、Block-Max MaxScore
 
-全文检索、学习型稀疏 Embedding 用这个：3.0 给稀疏索引整代升级，代价是要手动开。
+官方原话：「Milvus 3.0 对稀疏向量索引进行了全面升级。它引入了新的搜索算法——SINDI、Block-Max WAND 和 Block-Max MaxScore——同时还支持倒排列表压缩、可配置量化以及按**工作负载选择搜索算法**。」
 
-官方原话：「Milvus 3.0 对稀疏向量索引进行了全面升级。它引入了新的搜索算法——SINDI、Block-Max WAND 和 Block-Max MaxScore——同时还支持倒排列表压缩、可配置量化以及按工作负载选择搜索算法。」
+跟旧版比：2.x只有一条默认路径 SPARSE_INVERTED_INDEX——查询进来逐个文档算 BM25、维护 top-k。文档量和查询词数一涨，要算分的候选跟着涨，变慢就慢在这。
 
-关键数字（官方内部基准）：
+3.0 把遍历算法做成了索引参数 `inverted_index_algo`，按场景选：
 
-> 压缩后的 BM25 索引在可比召回率下比 2.6 稀疏索引小约 3 倍，而 SINDI 在学习型稀疏 Embeddings 上达到的 QPS 最高可达 MaxScore 的 10 倍左右。
+| 遇到的情况 | 选什么 |
+|---|---|
+| 查询词多、k 值大（一次召回上百条） | `DAAT_MAXSCORE`（BM25 的默认值） |
+| 查询短、k 值小 | `DAAT_WAND` |
+| 想在上面的 MaxScore / WAND 的路子上再压延迟 | `BLOCK_MAX_MAXSCORE` / `BLOCK_MAX_WAND` |
+| 打分要用全库统计量（如平均文档长度），或需要对照基线 | `TAAT_NAIVE` |
+| 稀疏向量检索用 IP 度量 | `SINDI`（IP 的默认值， 3.0 新增的搜索算法之一） |
 
-换算法怎么生效？需要手动提升目标索引版本，官方发布说明原文：「新引入的索引算法在生效前需要手动将目标索引版本提升（例如将 `dataCoord.targetVecIndexVersion` 设为 10，将 `dataCoord.targetScalarIndexVersion` 设为 4）；在后续版本中，这些功能将默认启用。」
+> 算法内部见 [索引算法进阶](./Milvus3.0索引算法进阶)。
 
-```yaml
-dataCoord:
-  targetVecIndexVersion: 10
-  targetScalarIndexVersion: 4
+```python
+from pymilvus import MilvusClient, DataType, Function, FunctionType
+
+client = MilvusClient(uri="http://127.0.0.1:19530")
+name = "demo_fts"
+if client.has_collection(name):
+    client.drop_collection(name)
+
+schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
+schema.add_field("id", DataType.INT64, is_primary=True)
+# 文本字段开分词，BM25 按词项建倒排
+schema.add_field("text", DataType.VARCHAR, max_length=512,
+                 enable_analyzer=True, analyzer_params={"type": "chinese"})
+schema.add_field("sparse", DataType.SPARSE_FLOAT_VECTOR)
+# 服务端函数：写入原文，自动生成稀疏向量
+schema.add_function(Function(name="bm25", function_type=FunctionType.BM25,
+                             input_field_names=["text"], output_field_names=["sparse"]))
+client.create_collection(name, schema=schema)
+
+rows = [
+    {"id": 1, "text": "Milvus 3.0 稀疏索引支持 SINDI 算法，全文检索更快"},
+    {"id": 2, "text": "倒排索引把词项映射到文档列表，BM25 用它计算相关性"},
+    {"id": 3, "text": "向量数据库在同一张表里做稠密向量召回和关键词召回"},
+    {"id": 4, "text": "磁盘索引 DISKANN 把向量放在 SSD 上，控制内存占用"},
+    {"id": 5, "text": "Faiss 的 IVF 索引用 nlist 切分倒排列表，查询时扫 nprobe 个"},
+]
+client.insert(name, rows)
+client.flush(name)
+
+index_params = client.prepare_index_params()
+index_params.add_index(
+    field_name="sparse", index_name="sparse_idx",
+    index_type="SPARSE_INVERTED_INDEX", metric_type="BM25",
+    params={"inverted_index_algo": "SINDI"},   # 直接指定算法
+)
+client.create_index(name, index_params)
+print("[describe_index]", client.describe_index(name, "sparse_idx"))
+client.load_collection(name)
+
+# 检索：直接传查询原文，服务端分词后走 BM25 打分
+res = client.search(collection_name=name, data=["倒排索引 稀疏"],
+                    anns_field="sparse", output_fields=["text"], limit=3)
+for hits in res:
+    for hit in hits:
+        print(f"  score={hit['distance']:.4f} | {hit['entity']['text']}")
 ```
 
-（配置通过 `user.yaml` 覆盖，修改方法见 7.1.2。）启用后的默认变化，官方原话：「启用新索引版本后，SINDI 将成为稀疏 IP 搜索的默认选项，而 MaxScore 将成为 BM25 的默认选项。」
+**跑起来长这样**
 
-适用面（官方表述）：「mmap 加载、序列化和 BM25 评分机制也得到了优化，从而降低了大规模稀疏向量和全文搜索的索引存储及加载开销。」——收益在大规模稀疏索引上最明显。
+```text
+[describe_index] {'inverted_index_algo': 'SINDI', 'metric_type': 'BM25', 'index_type': 'SPARSE_INVERTED_INDEX', 'field_name': 'sparse', 'index_name': 'sparse_idx', 'total_rows': 5, 'indexed_rows': 5, 'pending_index_rows': 0, 'state': 'Finished'}
+  score=1.7487 | Milvus 3.0 稀疏索引支持 SINDI 算法，全文检索更快
+  score=1.6439 | 倒排索引把词项映射到文档列表，BM25 用它计算相关性
+  score=0.3104 | 磁盘索引 DISKANN 把向量放在 SSD 上，控制内存占用
+```
 
-**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md)
+**怎么确认用的是哪套算法**：看 `describe_index` 返回的 `inverted_index_algo` 字段，上面返回 `SINDI`。发布说明还有另一条路径——配置 `dataCoord.targetVecIndexVersion: 10`、`dataCoord.targetScalarIndexVersion: 4` 让新索引整体默认生效（「启用新索引版本后，SINDI 将成为稀疏 IP 搜索的默认选项，而 MaxScore 将成为 BM25 的默认选项」），建单个索引时用 `inverted_index_algo` 参数就够了。
 
-## 7.4.2 FAISS 直通：把现成配方搬进来
+**参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md) +[Sparse Inverted Index](https://milvus.io/docs/zh/sparse-inverted-index.md)（`inverted_index_algo` 取值与默认值的官方说明）
 
-手里有调好的 Faiss 工厂字符串、专用索引类型又覆盖不了时用——官方定性「专家级直通功能」，先看硬限制再上手。
+## 7.4.2 FAISS 直通：用 Faiss 工厂字符串建索引
 
-「FAISS 索引类型是 Milvus 3.0.0 及更高版本中提供的一种专家级直通功能。它允许您提供一个 Faiss 索引生成器字符串，而非选择固定的 Milvus 索引类型。」——你手里有调好的 Faiss 配方，原样搬进来。
+你一直使用 Faiss 做向量检索。随着数据量和服务负载增长，你决定把检索系统迁移到 Milvus，希望使用它的数据库能力。但迁移后，你发现一个问题：原来在 Faiss 中调好的索引配方，在 Milvus 的专用索引类型里找不到完全对应的组合。
 
-适用面要看清：「上游 Faiss 接受的工厂字符串并不一定被 Milvus 自动支持。」兼容性取决于向量字段类型、度量、维度、编译进镜像的 Faiss 模块，以及索引是否支持 Milvus 所需的操作。官方也提醒：常见配方优先用专用索引类型，「因为它具有稳定且有文档记录的参数契约」。
+如果你已经有一套经过验证的 Faiss 索引配方，又希望在 Milvus 中继续使用它，可以了解 **FAISS 直通**。它允许你把 Faiss 索引工厂字符串（例如 `IVF64,Flat`）作为 `faiss_index_name` 传给 Milvus。Milvus 会将这个字符串转交给底层Knowhere的 FAISS 适配器，由 Faiss 构建相应的索引；构建出的索引随后由 Milvus 按正常索引生命周期管理。
 
-硬性限制：只支持 `FLOAT_VECTOR` 和 `BINARY_VECTOR`（不支持 FLOAT16/BFLOAT16/INT8/SPARSE）；「通用 FAISS 适配器在 CPU 上运行。它不是 Faiss GPU 索引类型」；必须指定 `faiss_index_name` 构建参数。
+注意：不是把现有 Faiss 索引文件直接导入 Milvus。如果还不理解，就直接看本小结最后的注释内容。
+
+```python
+import random
+from pymilvus import MilvusClient, DataType
+
+client = MilvusClient(uri="http://127.0.0.1:19530")
+name = "demo_faiss"
+if client.has_collection(name):
+    client.drop_collection(name)
+
+rng = random.Random(42)
+vectors = [[rng.random() for _ in range(128)] for _ in range(3000)]
+
+schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
+schema.add_field("id", DataType.INT64, is_primary=True)
+schema.add_field("category", DataType.VARCHAR, max_length=32)
+schema.add_field("vector", DataType.FLOAT_VECTOR, dim=128)
+client.create_collection(name, schema=schema)
+client.insert(name, [{"id": i,
+                      "category": "reference" if i % 2 == 0 else "query",
+                      "vector": v} for i, v in enumerate(vectors)])
+client.flush(name)
+
+index_params = client.prepare_index_params()
+index_params.add_index(
+    field_name="vector", index_name="faiss_ivf_flat",
+    index_type="FAISS",                         # 不走 Milvus 固定索引类型
+    metric_type="L2",
+    params={"faiss_index_name": "IVF64,Flat"},  # 工厂字符串原样交给 Faiss
+)
+client.create_index(name, index_params)
+print("[describe_index]", client.describe_index(name, "faiss_ivf_flat"))
+client.load_collection(name)
+
+res = client.search(collection_name=name, data=[vectors[0]],
+                    anns_field="vector", filter='category == "reference"',
+                    search_params={"params": {"nprobe": 8}},  # Faiss 的搜索参数
+                    limit=5, output_fields=["category"])
+for hit in res[0]:
+    print(f"  id={hit['id']} dist={hit['distance']:.4f} cat={hit['entity']['category']}")
+```
+
+
+
+**怎么确认**：`describe_index` 返回 `index_type: 'FAISS'` 和 `faiss_index_name: 'IVF64,Flat'`，工厂字符串原样写回，说明确实走了 Faiss 构建。
+
+**注意事项与坑**：
+- 建索引必须提供 `faiss_index_name`，Milvus 原样传给 Faiss，不会自动转成专用索引类型；
+- 通用 FAISS 适配器在 CPU 上运行，不是 Faiss GPU 索引类型；
+- 不支持搜索迭代器，也不提供原始向量回读；
+- 搜索参数因工厂而异：`IVF64,Flat` 用 `nprobe`，`HNSW16,Flat` 用 `efSearch`，工厂不支持的参数会被拒绝；
+- 标量过滤依赖底层索引对 ID selector 的支持：官方测过过滤搜索的浮点工厂是 `Flat`、`IVF64,Flat`、`HNSW16,Flat`，不能推断所有工厂或二进制索引都支持；`PQ8x4` 建得出来但过滤搜索会失败，无过滤场景要单独验证；
+- 范围搜索看工厂：浮点 `Flat` 有测试覆盖，二进制 FAISS 索引不要用范围搜索；
+- 用 `COSINE` 度量时，索引每次重新加载后都要重新验证分数和范围搜索阈值：3.0.0 的 Knowhere 在反序列化时不恢复 FAISS 适配器的 cosine 归一化状态；
+
+
+**什么时候别用它**：刚开始用 Milvus、手里没有现成的 Faiss 配方、也没有明确的组合需求——那就不要从直通开始，先看 Milvus 专用索引类型。一句话判断：**「我有一套已经验证的 Faiss 配方，或者需要的组合无法用专用 Milvus 索引表达」时，再考虑 FAISS 直通。**
 
 **参考文档**：[FAISS 索引类型](https://milvus.io/docs/zh/faiss.md)
 
+> 写在最后：FAISS 直通说白了就是：**Milvus 给你留了个“Faiss 配方自带”的入口。这是给有 Faiss 包袱、又想用 Milvus 的人开的后门，不是大多数人选索引的首选。** 没有现成配方、也说不清为什么非要用某种 Faiss 组合，就别为了“能用 Faiss”而用它；优先选 Milvus 专用索引，省得自己承担兼容性和参数验证的麻烦。
+
 ## 7.4.3 EmbList + DiskANN：嵌入列表的磁盘索引
 
-ColBERT/ColPali 这类晚期交互模型一行就是一串向量，或向量总量超出内存预算时，用磁盘路径。
+大白话说：**EmbList + DiskANN 是给->“一个东西要挂很多向量，而且这些向量多到塞不进内存”的场景准备的。** 一个文档只有一个向量？大概率用不上。文档切成很多段、每个 token 都有向量，或者一个多模态对象有多个向量，再加上数据规模顶到内存预算。
 
-这是 7.3.2 StructArray 的索引侧配套。官方描述：「EmbList + DISKANN——针对 StructArray 嵌入列表的磁盘上多向量索引，包含 Muvera 和 Lemur 等加速路径。」设计动机：「ColBERT 等晚期交互模型会为每个令牌生成一个向量，而多模态实体可能包含多种视图。EmbList 为每个实体存储一个可变长度的向量列表，并以 DISKANN 作为磁盘索引。当语料库超过内存预算时，磁盘路径可有效控制 RAM 占用量。」
+**它不是给普通向量检索换个更酷的索引，而是解决“一个实体多个向量”和“向量太多占内存”这两件具体麻烦事。** 如果两件事你都没遇到，就不要盲目的使用这个新功能。
 
-怎么建？在 StructArray 的向量子字段上建 `DISKANN` 索引，搜索走 MAX_SIM（见 7.3.2 引擎依赖关系）。Muvera / Lemur 是同一条官方描述里列出的加速路径，具体用法以当前版本的官方支持说明为准。
+```python
+import random
+from pymilvus import MilvusClient, DataType
+from pymilvus.client.embedding_list import EmbeddingList
 
-什么时候值得换：ColBERT/ColPali 类晚期交互检索、向量总量超出内存。
+client = MilvusClient(uri="http://127.0.0.1:19530")
+name = "demo_emblist"
+if client.has_collection(name):
+    client.drop_collection(name)
 
-**参考文档**：[使用 Embeddings 列表进行搜索](https://milvus.io/docs/zh/search-with-embedding-lists.md)
+schema = client.create_schema()
+schema.add_field("id", DataType.INT64, is_primary=True, auto_id=True)
+schema.add_field("title", DataType.VARCHAR, max_length=512)
+# StructArray：一个文档 = 一个变长的 {chunk, emb} 列表
+struct = client.create_struct_field_schema()
+struct.add_field("chunk", DataType.VARCHAR, max_length=256)
+struct.add_field("emb", DataType.FLOAT_VECTOR, dim=8)
+schema.add_field("paragraphs", DataType.ARRAY, element_type=DataType.STRUCT,
+                 struct_schema=struct, max_capacity=64)
+client.create_collection(name, schema=schema)
+
+def vec(seed):
+    r = random.Random(seed)
+    return [round(r.uniform(-1, 1), 3) for _ in range(8)]
+
+rows = [
+    {"title": "向量索引综述", "paragraphs": [
+        {"chunk": "HNSW 是图索引", "emb": vec(1)},
+        {"chunk": "IVF 用聚类切分", "emb": vec(2)},
+        {"chunk": "DiskANN 放在磁盘", "emb": vec(3)},
+        {"chunk": "量化降低内存", "emb": vec(4)}]},
+    {"title": "全文检索入门", "paragraphs": [
+        {"chunk": "BM25 是经典打分", "emb": vec(5)},
+        {"chunk": "倒排索引最常见", "emb": vec(6)},
+        {"chunk": "分词器决定词项", "emb": vec(7)}]},
+    {"title": "重排策略", "paragraphs": [
+        {"chunk": "RRF 融合多路", "emb": vec(8)},
+        {"chunk": "重排模型更准更慢", "emb": vec(9)}]},
+]
+client.insert(name, rows)   # 不传 id，auto_id 自动生成
+client.flush(name)
+
+index_params = client.prepare_index_params()
+index_params.add_index(
+    field_name="paragraphs[emb]",   # 索引建在 StructArray 的向量子字段上
+    index_name="emb_idx",
+    index_type="DISKANN",           # 磁盘索引
+    metric_type="MAX_SIM_COSINE",
+)
+client.create_index(name, index_params)
+print("[describe_index]", client.describe_index(name, "emb_idx"))
+client.load_collection(name)
+
+# 查询端：两段查询文本 = 两个向量
+q = EmbeddingList()
+q.add_batch([vec(101), vec(102)])
+
+res = client.search(collection_name=name, data=[q],
+                    anns_field="paragraphs[emb]",
+                    limit=3, output_fields=["title"])
+for hit in res[0]:
+    print(f"  doc={hit['entity']['title']} score={hit['distance']:.4f}")
+```
+
+
+要点：
+
+- 一个文档可以作为一个实体，里面存储多个段落以及各自的向量，不同文档的段落数可以不一样，搜索的时候也可以传入一个向量列表，列表的每一个向量作为查询的一部分，milvus会把查询列表和文档里的向量列表进行比较，搜索结果是按照文档实体返回的，`MAX_SIM` 参数会对查询中的每个向量，分别找出文档列表中最相似的向量，再把分数加起来。
+- `MAX_SIM_COSINE` 不是普通的余弦分数：两个查询向量分别精确命中同一文档的两个 chunk，把最高得分相加才是结果，因此，查询有两个向量时，最终分数可能超过 1 。
+
+**注意事项与坑**：
+- 索引名：`describe_index` 必须显式传索引名。
+- 容量上限：StructArray 的 `max_capacity` 是硬上限。
+- 查询参数：`data` 必须包成 `EmbeddingList`；传普通向量会在客户端直接崩，报错只有一句 `required argument is not a float`，不提示原因。
+
+**什么时候别用它**：数据量还在内存预算内、也没有一行多向量的需求——就不要碰磁盘索引：它拿延迟换容量，**「向量加索引超出单机内存预算，或者一行必须存多个向量」时，再考虑 EmbList + DISKANN。**
+
+**参考文档**：[使用 Embeddings 列表进行搜索](https://milvus.io/docs/zh/search-with-embedding-lists.md) · [StructArray Limits](https://milvus.io/docs/zh/structarray-limits.md)
 
 ## 7.4.4 怎么选：负载 → 索引对照
 
-不用背三节细节，先看这张表——每行都是前三节官方表述的汇总，不新增论断：
-
-| 你的负载 | 用什么 | 理由 |
+| 负载 | 用什么 | 理由 |
 |---|---|---|
-| 稠密向量、内存够 | 专用索引类型（`AUTOINDEX` 起步） | 官方提醒「常见配方优先用专用索引类型」，参数契约稳定（见 7.4.2） |
-| 全文 / BM25 / 稀疏 Embedding | 开新索引版本 → SINDI（IP）/ MaxScore（BM25） | 官方「SINDI 将成为稀疏 IP 搜索的默认选项，而 MaxScore 将成为 BM25 的默认选项」（见 7.4.1） |
-| ColBERT/ColPali、一行多向量 | EmbList + DISKANN | 官方「针对 StructArray 嵌入列表的磁盘上多向量索引」（见 7.4.3） |
-| 向量总量超内存预算 | DISKANN 磁盘路径 | 官方「磁盘路径可有效控制 RAM 占用量」（见 7.4.3） |
-| 手里有现成 Faiss 配方、专用类型覆盖不了 | FAISS 直通 | 专家级功能，先核对硬限制（见 7.4.2） |
+| 稠密向量、内存够 | 专用索引类型（`AUTOINDEX` 起步） | 「常见场景优先用专用索引类型」 |
+| 全文 / BM25 / 稀疏 Embedding | 开新索引版本 → SINDI（IP）/ MaxScore（BM25） | 「SINDI 将成为稀疏 IP 搜索的默认选项，而 MaxScore 将成为 BM25 的默认选项」 |
+| ColBERT/ColPali、一行多向量 | EmbList + DISKANN | 「针对 StructArray 嵌入列表的磁盘上多向量索引」 |
+| 向量总量超内存预算 | DISKANN 磁盘路径 | 「磁盘路径可有效控制 RAM 占用量」 |
+| 已有 Faiss 索引配置、专用类型覆盖不了 | FAISS 直通 | 先核对限制 |
 
-选完怎么验证：建索引 → 拿一批典型查询跑小批量 → 对比 QPS 和召回。建索引与刷新的操作在 7.2.4，检索的写法在 7.3.2，都是现成的，不重复贴代码。
+
 
 **参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md) · [FAISS 索引类型](https://milvus.io/docs/zh/faiss.md) · [使用 Embeddings 列表进行搜索](https://milvus.io/docs/zh/search-with-embedding-lists.md)
 
@@ -78,7 +267,6 @@ ColBERT/ColPali 这类晚期交互模型一行就是一串向量，或向量总�
 - FAISS 直通是专家级功能：给生成器字符串，只支持 FLOAT/BINARY，CPU，必须 `faiss_index_name`；常规场景用专用索引类型；
 - EmbList + DiskANN：ColBERT/ColPali 的磁盘索引方案，RAM 预算紧时用；
 
-- 存储格式（Vortex/Lance）、写入引擎（Woodpecker）、强制合并、Storage V3 清单是另一层，见 [存储与写入引擎·深入](./Milvus3.0存储与写入引擎)。
 
 **参考文档**：[Milvus 发布说明](https://milvus.io/docs/zh/release_notes.md) · [FAISS 索引类型](https://milvus.io/docs/zh/faiss.md) · [使用 Embeddings 列表进行搜索](https://milvus.io/docs/zh/search-with-embedding-lists.md)
 
