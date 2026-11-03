@@ -2,54 +2,112 @@
 
 ## 7.5.0 要搭的东西
 
-一句话：湖上一份商品 Parquet，原地建索引；集合随时拍快照；一次搜索请求里完成召回、过滤、统计。全程不把数据拷进 Milvus 的业务表，也不写一行 ETL 定时任务。
+先看这是不是你的处境：数据一直在数据湖里（S3 上的 Parquet），业务要的是"数据随时可查、更新马上生效、出事能回退"。老做法是搭一条 ETL 链：定时把湖上数据抽进 Milvus 的业务表——多一份全量副本、多一套定时任务，数据永远比湖上慢一拍；备份恢复则是全量导出再导入，数据量越大越熬人。
+
+3.0 给的是另一条路：不拷贝。外部 Collection 直接在湖上 Parquet 原地建索引，查询时按需读对象存储；数据变了 refresh 一次元数据（官方口径 150-250 ms）；任意时刻 create_snapshot 拍快照（毫秒级），restore_snapshot 恢复成一个新集合（官方口径：比传统备份恢复快 10-100 倍）。这一章把这四件事完整跑一遍，最后用存储、延迟、查询三组指标算收益和代价。
 
 **最终效果**（按官方口径描述，具体数值以你的数据为准）：
 
 1. `search("无线降噪耳机")` 直接在 Parquet 数据上返回结果——数据零拷贝；
 2. 搜索附带 `filter='price < 500'`，过滤在服务端完成，不拉全量到客户端；
-3. 再用 `group_by_fields` 在服务端聚合，拿到品牌分布（7.3.5 的聚合查询）；
+3. 再用 `group_by_fields` 在服务端聚合，拿到品牌分布（系统性展开在查询结果处理篇，规划中）；
 4. 更新湖上文件后再 `refresh` 一次，新数据可查——刷新耗时官方口径 150-250 ms；
 5. 任意时刻 `create_snapshot` 拍一份（毫秒级），`restore_snapshot` 恢复到新集合（官方口径几秒到几分钟），比传统备份恢复快 10-100 倍。
 
-**环境**：v3.0.x、Storage V3 已开（开关见 7.1.2）、`pymilvus>=3.0.1`、一份可被 Milvus 访问的 S3/MinIO 路径（含 Parquet 文件）。
+**环境**：v3.0.x、Storage V3 已开（开关见 7.1.2）、pymilvus 3.0.2（本节实测版本）、一份可被 Milvus 访问的 S3/MinIO 路径（含 Parquet 文件）。
 
 **参考文档**：[创建外部 Collection](https://milvus.io/docs/zh/create-an-external-collection.md) · [管理快照](https://milvus.io/docs/zh/manage-snapshots.md)
 
 ## 7.5.1 数据准备：湖上放一份 Parquet
 
-准备一个 `products.parquet`，至少四列：`id`（int64）、`product_name`（string）、`price`（double）、`embedding`（768 维 float）。上传到 Milvus 能访问的 S3 桶。确认路径能列出文件：
+准备一个 `products.parquet`，四列：`id`（int64）、`product_name`（string）、`price`（double）、`embedding`（768 维 float）。生成并上传到 MinIO（真实项目换成你自己的 S3 地址和凭据）：
 
 ```python
-import pyarrow.dataset as ds
-dataset = ds.dataset("s3://my-bucket/products/", format="parquet")
-print(dataset.schema)
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import boto3
+
+rng = np.random.default_rng(42)
+N, DIM = 1000, 768
+ids = np.arange(1, N + 1)
+names = [f"product_{i:04d}" for i in ids]
+price = np.round(rng.uniform(10, 1000, size=N), 2)
+emb = rng.standard_normal((N, DIM)).astype(np.float32)
+
+tbl = pa.table({
+    "id": pa.array(ids),
+    "product_name": pa.array(names),
+    "price": pa.array(price),
+    "embedding": pa.array(emb.tolist(), pa.list_(pa.float32(), DIM)),
+})
+pq.write_table(tbl, "products.parquet", compression="snappy")
+print("rows:", tbl.num_rows)
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localhost:9000",
+    aws_access_key_id="minioadmin",
+    aws_secret_access_key="minioadmin",
+    region_name="us-east-1",
+    config=boto3.session.Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+)
+if "lake-demo" not in [b["Name"] for b in s3.list_buckets().get("Buckets", [])]:
+    s3.create_bucket(Bucket="lake-demo")
+s3.upload_file("products.parquet", "lake-demo", "products75/products.parquet")
+print([(o["Key"], o["Size"]) for o in s3.list_objects_v2(Bucket="lake-demo", Prefix="products75/")["Contents"]])
+```
+
+**跑起来长这样**：
+
+```text
+rows: 1000
+[('products75/products.parquet', 3714148)]
 ```
 
 这一步和 Milvus 无关，是数据湖侧的准备。记住两个约束：**文件格式要能被引擎识别**（Parquet/Lance/Iceberg/Vortex，官方列的四种）；**列名与 Schema 映射要对上**（下一步的 `external_field` 负责）。
 
-**参考文档**：[创建外部 Collection](https://milvus.io/docs/zh/create-an-external-collection.md)
-
 ## 7.5.2 搭建步骤
 
-### 第一步：建外部 Collection（7.2.2～7.2.5 五步浓缩）
+### 第一步：建外部 Collection
 
 ```python
+import json
 from pymilvus import MilvusClient, DataType
 
-client = MilvusClient(uri="http://localhost:19530")
+client = MilvusClient(uri="http://127.0.0.1:19530")
+
+EXT_SPEC = json.dumps({
+    "format": "parquet",
+    "extfs": {
+        "access_key_id": "minioadmin",
+        "access_key_value": "minioadmin",
+        "region": "us-east-1",
+        "cloud_provider": "aws",
+        "endpoint_url": "http://minio:9000",   # Milvus 容器视角的地址，不是 localhost
+        "use_ssl": "false",
+        "use_virtual_host": "false",
+    },
+})
 
 schema = MilvusClient.create_schema(
-    external_source="s3://my-bucket/products/",
-    external_spec='{"format": "parquet", "extfs": {"storage_type": "remote"}}',
+    external_source="s3://lake-demo/products75/",
+    external_spec=EXT_SPEC,
 )
-schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True, external_field="id")
+schema.add_field(field_name="id", datatype=DataType.INT64, external_field="id")
 schema.add_field(field_name="product_name", datatype=DataType.VARCHAR, max_length=512, external_field="product_name")
 schema.add_field(field_name="price", datatype=DataType.DOUBLE, external_field="price")
 schema.add_field(field_name="embedding", datatype=DataType.FLOAT_VECTOR, dim=768, external_field="embedding")
 
+if client.has_collection(collection_name="catalog"):
+    client.drop_collection(collection_name="catalog")
 client.create_collection(collection_name="catalog", schema=schema)
 ```
+
+两个实测踩过的坑：
+
+- **不要声明 `is_primary=True`。**按普通集合的习惯加主键，服务端直接拒绝：`external collection catalog does not support user-defined primary key field id`。外部集合的主键由 Milvus 自动生成（`describe` 里 `auto_id: True`）；
+- **`endpoint_url` 写 Milvus 容器能访问到的地址**。compose 网络里是 `http://minio:9000`；写 `localhost:9000` 指向 Milvus 容器自己，必失败（细节见 7.2.3）。
 
 ### 第二步：建索引并刷新
 
@@ -60,52 +118,101 @@ index_params.add_index(field_name="product_name", index_type="AUTOINDEX")
 index_params.add_index(field_name="embedding", index_type="AUTOINDEX", metric_type="COSINE")
 client.create_index(collection_name="catalog", index_params=index_params)
 
+import time
+t0 = time.time()
 client.refresh_external_collection(collection_name="catalog")
+print(f"refresh 耗时: {time.time()-t0:.3f}s")
+
+client.load_collection(collection_name="catalog")
 ```
 
-### 第三步：验证——搜索 + 过滤 + 统计
+**跑起来长这样**：
+
+```text
+refresh 耗时: 0.030s
+```
+
+（本地 MinIO、1000 行实测 0.01–0.03s，每次略有差异；官方口径 150-250 ms，随元数据规模变化。）
+
+### 第三步：验证——搜索 + 过滤
+
+> 下面三块接在同一个会话里按顺序执行（`client` 已就绪）；单独重跑某一块时，先补 `client = MilvusClient(uri="http://127.0.0.1:19530")`。
 
 ```python
-client.load_collection(collection_name="catalog")
+import pyarrow.parquet as pq
+query_vec = pq.read_table("products.parquet").column("embedding")[0].as_py()
 
 res = client.search(
     collection_name="catalog",
-    data=[query_vec],                 # 768 维查询向量
+    data=[query_vec],
     anns_field="embedding",
     search_params={"metric_type": "COSINE"},
     filter="price < 500",
-    limit=10,
+    limit=5,
     output_fields=["product_name", "price"],
 )
 for hit in res[0]:
-    print(hit["distance"], hit["entity"]["product_name"], hit["entity"]["price"])
+    print(f"{hit['distance']:.4f} | {hit['entity']['product_name']} | {hit['entity']['price']}")
+```
+
+**跑起来长这样**（过滤下推到服务端，只返回命中行）：
+
+```text
+0.0977 | product_0634 | 378.98
+0.0952 | product_0398 | 302.41
+0.0853 | product_0718 | 110.88
+0.0849 | product_0548 | 89.25
+0.0806 | product_0218 | 132.52
 ```
 
 ### 第四步：拍快照、演练恢复
 
 ```python
-client.flush(collection_name="catalog")           # 官方建议：拍前 flush
-client.create_snapshot(collection_name="catalog", snapshot_name="catalog_base")
+import time
 
-# … 模拟湖上文件被意外覆盖 …
+if "catalog_base" not in client.list_snapshots(collection_name="catalog"):
+    client.create_snapshot(collection_name="catalog", snapshot_name="catalog_base")
+print(client.list_snapshots(collection_name="catalog"))
 
-job_id = client.restore_snapshot(
-    snapshot_name="catalog_base",
-    collection_name="catalog_restored",
-)
+if client.has_collection(collection_name="catalog_restored"):
+    client.drop_collection(collection_name="catalog_restored")
+job_id = client.restore_snapshot("catalog_base", "catalog", "catalog_restored")
+print("job_id =", job_id)
 while True:
-    state = client.get_restore_snapshot_state(job_id=job_id)
-    print(f"State: {state.state}, Progress: {state.progress} %")
-    if state.progress >= 100:
+    st = client.get_restore_snapshot_state(job_id=job_id)
+    print(f"State: {st.state}, Progress: {st.progress} %")
+    if st.state == "RestoreSnapshotFailed":
+        raise RuntimeError(st.reason)
+    if st.progress >= 100:
         break
     time.sleep(2)
+
+client.load_collection(collection_name="catalog_restored")   # 恢复出的集合要先 load 才能查
+print(client.query(collection_name="catalog_restored", filter="price < 500", output_fields=["count(*)"]))
 ```
+
+**跑起来长这样**（1000 行本地恢复约 6 秒）：
+
+```text
+['catalog_base']
+job_id = 470200901355372902   # 每次不同
+State: RestoreSnapshotPending, Progress: 0 %
+State: RestoreSnapshotExecuting, Progress: 0 %
+State: RestoreSnapshotExecuting, Progress: 0 %
+State: RestoreSnapshotCompleted, Progress: 100 %
+data: ["{'count(*)': 500}"], extra_info: {}
+```
+
+四个实测踩过的坑：
+
+- **外部集合不支持 `flush`**，拍快照前不要调：`flush operation is not supported for external collection`；
+- `restore_snapshot` 的签名是 `(snapshot_name, source_collection_name, target_collection_name)`，返回 `job_id`（int），不是从 `collection_name=` 参数里拿；
+- `describe_snapshot` 必须同时给 `snapshot_name` 和 `collection_name`；
+- **恢复出的集合要先 `load_collection` 才能查**，否则 `failed to query: collection not loaded`。
 
 ### 第五步（可选）：排序、聚合、重排
 
-在同一个集合上试 7.3.5 的能力：`group_by` 聚合品牌分布、`ORDER BY` 服务端排序、`hybrid_search` 加重排。这些是纯检索侧的增强，不需要改数据。
-
-**参考文档**：[创建外部 Collection](https://milvus.io/docs/zh/create-an-external-collection.md) · [管理快照](https://milvus.io/docs/zh/manage-snapshots.md)
+在同一个集合上试服务端聚合与排序：`group_by` 聚合价格段分布、`hybrid_search` 加重排（系统性展开见查询结果处理篇，规划中）。这些是纯检索侧的增强，不需要改数据。
 
 ## 7.5.3 日常运行：增量与演进
 
